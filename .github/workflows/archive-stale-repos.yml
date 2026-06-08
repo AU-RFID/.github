@@ -136,8 +136,11 @@ jobs:
               [ "$IS_FORK" = "true" ] && FORK_LABEL=" [fork]"
 
               if [ "$DRY_RUN" = "true" ]; then
-                echo "  [DRY RUN]  Would archive: ${NAME}${FORK_LABEL} -- last push: $PUSHED"
-                echo "  [DRY RUN]  Would prepend security banner to ${NAME}/README.md"
+                LAST_AUTHOR=$(gh api "/repos/$ORG/$NAME/commits?per_page=1" \
+                  --jq '.[0].commit.author.name' 2>/dev/null || echo "unknown")
+                LAST_LOGIN=$(gh api "/repos/$ORG/$NAME/commits?per_page=1" \
+                  --jq '.[0].author.login // "unknown"' 2>/dev/null || echo "unknown")
+                echo "  [DRY RUN]  Would archive: ${NAME}${FORK_LABEL} -- last push on $PUSHED by $LAST_AUTHOR (@$LAST_LOGIN)"
               else
                 echo "  [ARCHIVING] ${NAME}${FORK_LABEL} -- last push: $PUSHED"
 
