@@ -37,7 +37,7 @@ jobs:
 
           SECURITY_BANNER='> [!CAUTION]
           > **This repository has been archived and is no longer maintained.**
-          > This codebase may contain unpatched security vulnerabilities, outdated dependencies, or compromised supply chain components. **Do not clone, install, or execute any code from this repository** without first conducting a full security review. Unauthorized or unreviewed use of archived internal code may expose systems to supply chain attacks or other security risks. If you believe this repository contains code still in active use, contact your security or engineering team immediately.
+          > This codebase may contain unpatched security vulnerabilities, outdated dependencies, or compromised supply chain components. **Do not clone, install, or execute any code from this repository** without first conducting a full security review. Unauthorized or unreviewed use of archived internal code may expose systems to supply chain attacks or other security risks. 
 
           ---
 
