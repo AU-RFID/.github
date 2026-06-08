@@ -17,11 +17,18 @@ jobs:
       contents: read
 
     steps:
+      - name: Generate installation token for rfid-automations
+        id: app-token
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: 1852893
+          private-key: ${{ secrets.AUTOMATIONS_PRIVATE_KEY }}
+          # Scope the token to this org only
+          owner: ${{ github.repository_owner }}
+
       - name: Find and dry-run archive stale org repositories
         env:
-          # Needs: org:read, repo (admin) — store as REPO_MANAGER_PAT org secret
-          GH_TOKEN: ${{ secrets.REPO_MANAGER_PAT }}
-          # Automatically resolved from the .github repo's owner (the org)
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
           ORG: ${{ github.repository_owner }}
           STALE_DAYS: ${{ github.event.inputs.stale_days || '365' }}
           DRY_RUN: 'true'
@@ -44,10 +51,10 @@ jobs:
 
           # Fetch all non-archived org repos, paginated
           while IFS= read -r repo; do
-            NAME=$(echo "$repo"      | jq -r '.name')
-            PUSHED=$(echo "$repo"    | jq -r '.pushed_at // empty')
-            TOPICS=$(echo "$repo"    | jq -r '.topics | join(" ")')
-            IS_FORK=$(echo "$repo"   | jq -r '.fork')
+            NAME=$(echo "$repo"    | jq -r '.name')
+            PUSHED=$(echo "$repo"  | jq -r '.pushed_at // empty')
+            TOPICS=$(echo "$repo"  | jq -r '.topics | join(" ")')
+            IS_FORK=$(echo "$repo" | jq -r '.fork')
 
             CHECKED=$((CHECKED + 1))
 
