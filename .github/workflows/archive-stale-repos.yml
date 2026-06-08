@@ -1,4 +1,4 @@
-name: Archive Stale Repositories (Dry Run)
+name: Archive Stale Repositories
 
 on:
   schedule:
@@ -23,51 +23,104 @@ jobs:
         with:
           app-id: 1852893
           private-key: ${{ secrets.AUTOMATIONS_PRIVATE_KEY }}
-          # Scope the token to this org only
           owner: ${{ github.repository_owner }}
 
-      - name: Find and dry-run archive stale org repositories
+      - name: Find and archive stale org repositories
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
           ORG: ${{ github.repository_owner }}
           STALE_DAYS: ${{ github.event.inputs.stale_days || '365' }}
-          DRY_RUN: 'true'
         run: |
           set -euo pipefail
 
           CUTOFF_DATE=$(date -d "-${STALE_DAYS} days" +%Y-%m-%dT%H:%M:%SZ)
 
+          SECURITY_BANNER='> [!CAUTION]
+          > **This repository has been archived and is no longer maintained.**
+          > This codebase may contain unpatched security vulnerabilities, outdated dependencies, or compromised supply chain components. **Do not clone, install, or execute any code from this repository** without first conducting a full security review. Unauthorized or unreviewed use of archived internal code may expose systems to supply chain attacks or other security risks. If you believe this repository contains code still in active use, contact your security or engineering team immediately.
+
+          ---
+
+          '
+
           echo "=========================================="
           echo "  Stale Repository Archiver"
           echo "  Org    : $ORG"
           echo "  Cutoff : ${STALE_DAYS} days (before $CUTOFF_DATE)"
-          echo "  Dry run: $DRY_RUN"
           echo "=========================================="
           echo ""
 
           CHECKED=0
           STALE_COUNT=0
-          SKIPPED_KEEP=0
+          SKIPPED_EXEMPT=0
+          ARCHIVED=0
+
+          update_readme() {
+            local repo_name="$1"
+            local clone_dir
+            clone_dir=$(mktemp -d)
+
+            git clone --depth 1 \
+              "https://x-access-token:${GH_TOKEN}@github.com/${ORG}/${repo_name}.git" \
+              "$clone_dir" 2>/dev/null
+
+            pushd "$clone_dir" > /dev/null
+
+            git config user.name  "rfid-automations[bot]"
+            git config user.email "1852893+rfid-automations[bot]@users.noreply.github.com"
+
+            local readme_file=""
+            for f in README.md readme.md README.MD README Readme.md; do
+              [ -f "$f" ] && readme_file="$f" && break
+            done
+
+            if [ -n "$readme_file" ]; then
+              if grep -q "This repository has been archived and is no longer maintained" "$readme_file"; then
+                echo "  [README]   $repo_name — banner already present, skipping"
+                popd > /dev/null
+                rm -rf "$clone_dir"
+                return
+              fi
+              local tmp
+              tmp=$(mktemp)
+              printf '%s\n' "$SECURITY_BANNER" | cat - "$readme_file" > "$tmp"
+              mv "$tmp" "$readme_file"
+              echo "  [README]   $repo_name — prepended security banner"
+            else
+              readme_file="README.md"
+              printf '%s\n' "$SECURITY_BANNER" > "$readme_file"
+              echo "  [README]   $repo_name — created README.md with security banner"
+            fi
+
+            git add "$readme_file"
+            git commit -m "chore: prepend security banner to README [automated]"
+            git push
+            popd > /dev/null
+            rm -rf "$clone_dir"
+          }
 
           # Fetch all non-archived org repos, paginated
           while IFS= read -r repo; do
             NAME=$(echo "$repo"    | jq -r '.name')
             PUSHED=$(echo "$repo"  | jq -r '.pushed_at // empty')
-            TOPICS=$(echo "$repo"  | jq -r '.topics | join(" ")')
             IS_FORK=$(echo "$repo" | jq -r '.fork')
 
             CHECKED=$((CHECKED + 1))
 
-            # Protect repos tagged keep or no-archive
-            if echo "$TOPICS" | grep -qE '(^| )(keep|no-archive)( |$)'; then
-              echo "  [SKIP]     $NAME — protected topic"
-              SKIPPED_KEEP=$((SKIPPED_KEEP + 1))
+            # Skip empty repos
+            if [ -z "$PUSHED" ]; then
+              echo "  [SKIP]     $NAME — no push date (empty repo)"
               continue
             fi
 
-            # Skip empty repos with no push date
-            if [ -z "$PUSHED" ]; then
-              echo "  [SKIP]     $NAME — no push date (empty repo)"
+            # Check archive-exempt custom property
+            EXEMPT=$(gh api \
+              "/repos/$ORG/$NAME/properties/values" \
+              --jq '.[] | select(.property_name == "archive-exempt") | .value' 2>/dev/null || echo "")
+
+            if [ "$EXEMPT" = "true" ]; then
+              echo "  [SKIP]     $NAME — archive-exempt property is true"
+              SKIPPED_EXEMPT=$((SKIPPED_EXEMPT + 1))
               continue
             fi
 
@@ -79,17 +132,20 @@ jobs:
               FORK_LABEL=""
               [ "$IS_FORK" = "true" ] && FORK_LABEL=" [fork]"
 
-              if [ "$DRY_RUN" = "true" ]; then
-                echo "  [DRY RUN]  Would archive: ${NAME}${FORK_LABEL} — last push: $PUSHED"
-              else
-                echo "  [ARCHIVING] ${NAME}${FORK_LABEL} — last push: $PUSHED"
-                gh api \
-                  --method PATCH \
-                  -H "Accept: application/vnd.github+json" \
-                  "/repos/$ORG/$NAME" \
-                  -f archived=true
-                echo "  [DONE]     $NAME archived."
-              fi
+              echo "  [ARCHIVING] ${NAME}${FORK_LABEL} — last push: $PUSHED"
+
+              # 1. Update README before archiving (archived repos are read-only)
+              update_readme "$NAME"
+
+              # 2. Archive the repo
+              gh api \
+                --method PATCH \
+                -H "Accept: application/vnd.github+json" \
+                "/repos/$ORG/$NAME" \
+                -f archived=true
+
+              ARCHIVED=$((ARCHIVED + 1))
+              echo "  [DONE]     $NAME archived."
             fi
 
           done < <(gh api \
@@ -102,13 +158,7 @@ jobs:
           echo "  Summary"
           echo "=========================================="
           echo "  Repos checked    : $CHECKED"
-          echo "  Skipped (keep)   : $SKIPPED_KEEP"
+          echo "  Skipped (exempt) : $SKIPPED_EXEMPT"
           echo "  Stale repos      : $STALE_COUNT"
-          echo ""
-          if [ "$DRY_RUN" = "true" ]; then
-            echo "  ✓ DRY RUN complete — no repos were modified."
-            echo "    Set DRY_RUN to 'false' in the workflow when ready to go live."
-          else
-            echo "  ✓ Done. $STALE_COUNT repo(s) archived."
-          fi
+          echo "  Archived         : $ARCHIVED"
           echo "=========================================="
