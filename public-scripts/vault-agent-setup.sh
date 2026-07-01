@@ -2,6 +2,11 @@
 PLIST="$HOME/Library/LaunchAgents/vault-agent.plist"
 VAULT_BIN=$(which vault)
 
+# Unload existing service if already running
+if launchctl list | grep -q "vault-agent"; then
+  launchctl bootout gui/$UID "$PLIST" 2>/dev/null
+fi
+
 cat > "$PLIST" << EOF
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
