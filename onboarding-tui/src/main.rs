@@ -26,7 +26,36 @@ use ratatui::prelude::*;
 use ratatui::widgets::{Block, Borders, List, ListItem, ListState, Paragraph, Wrap};
 
 use detect::{detect, Platform};
-use software::{registry, Section, Software};
+use software::{registry, Location, Section, Software};
+
+/// Where a command runs: the local shell, inside a WSL distro (from a
+/// Windows host), or on the Windows host itself (winget).
+#[derive(Clone)]
+enum Exec {
+    Bash,
+    Wsl(String),
+    WinCmd,
+}
+
+fn build_command(exec: &Exec, cmd: &str) -> Command {
+    match exec {
+        Exec::Bash => {
+            let mut c = Command::new("bash");
+            c.arg("-lc").arg(cmd);
+            c
+        }
+        Exec::Wsl(distro) => {
+            let mut c = Command::new("wsl.exe");
+            c.args(["-d", distro, "--", "bash", "-lc", cmd]);
+            c
+        }
+        Exec::WinCmd => {
+            let mut c = Command::new("cmd");
+            c.args(["/C", cmd]);
+            c
+        }
+    }
+}
 
 const LOGO: [&str; 6] = [
     "██████╗ ███████╗██╗██████╗   ██╗      █████╗ ██████╗ ",
@@ -41,6 +70,8 @@ const UNIVERSITY: &str = "A U B U R N   U N I V E R S I T Y";
 
 enum Screen {
     Welcome,
+    /// Windows host only: pick the WSL distro dev tools install into.
+    Distro,
     Scan,
     Install,
     Summary,
@@ -80,6 +111,9 @@ struct App {
     cursor: usize,
     /// One-shot warning shown in the footer (e.g. "pick an editor").
     notice: Option<String>,
+    /// WSL distros found on a Windows host, and the picker cursor.
+    distros: Vec<String>,
+    distro_cursor: usize,
     states: Vec<ItemState>,
     selected: Vec<bool>,
     screen: Screen,
@@ -116,6 +150,8 @@ impl App {
             order_req,
             cursor: 0,
             notice: None,
+            distros: Vec::new(),
+            distro_cursor: 0,
             states: vec![ItemState::Checking; n],
             selected: vec![false; n],
             screen: Screen::Welcome,
@@ -133,19 +169,21 @@ impl App {
         self.states = vec![ItemState::Checking; self.items.len()];
         self.selected = vec![false; self.items.len()];
         self.scan_done = false;
-        let checks: Vec<String> = self.items.iter().map(|s| s.check.clone()).collect();
+        let checks: Vec<(String, Exec)> = (0..self.items.len())
+            .map(|i| (self.items[i].check.clone(), self.exec_for(i)))
+            .collect();
         let (tx, rx) = mpsc::channel();
         self.rx = Some(rx);
         let dry_run = self.dry_run;
         thread::spawn(move || {
-            for (i, check) in checks.iter().enumerate() {
+            for (i, (check, exec)) in checks.iter().enumerate() {
                 // Dry run: pretend nothing is installed so the full first-day
                 // flow (everything missing → install → summary) can be previewed.
                 let result = if dry_run {
                     thread::sleep(Duration::from_millis(200)); // keep the checking… animation visible
                     None
                 } else {
-                    run_check(check)
+                    run_check(check, exec)
                 };
                 let _ = tx.send(Msg::Check(i, result));
             }
@@ -164,12 +202,12 @@ impl App {
         self.log.clear();
         self.current_step = 0;
 
-        let mut work: Vec<(String, String)> = Vec::new();
+        let mut work: Vec<(String, String, Exec)> = Vec::new();
         for &i in &picked {
             let item = &self.items[i];
             for s in &item.install {
                 self.steps.push(StepStatus { title: s.title.to_string(), state: '·' });
-                work.push((s.title.to_string(), s.cmd.clone()));
+                work.push((s.title.to_string(), s.cmd.clone(), self.exec_for(i)));
             }
             for f in &item.follow_up {
                 self.follow_ups.push((*f).to_string());
@@ -231,7 +269,7 @@ impl App {
             } else {
                 // Re-check everything so the summary shows the real post-install state.
                 for i in 0..self.items.len() {
-                    self.states[i] = match run_check(&self.items[i].check) {
+                    self.states[i] = match run_check(&self.items[i].check, &self.exec_for(i)) {
                         Some(d) => ItemState::Installed(d),
                         None => ItemState::Missing,
                     };
@@ -262,6 +300,21 @@ impl App {
         None
     }
 
+    /// Where item `i`'s commands run: locally, or (from a Windows host) inside
+    /// the chosen WSL distro for Dev tools and on the host for GUI apps.
+    fn exec_for(&self, i: usize) -> Exec {
+        if self.platform.windows_host() {
+            match self.items[i].location {
+                Location::Host => Exec::WinCmd,
+                Location::Dev => {
+                    Exec::Wsl(self.platform.wsl_distro.clone().unwrap_or_default())
+                }
+            }
+        } else {
+            Exec::Bash
+        }
+    }
+
     /// At least one editor must end up on the machine: already installed or selected.
     fn editor_picked(&self) -> bool {
         self.order_editors.iter().any(|&i| {
@@ -270,8 +323,8 @@ impl App {
     }
 }
 
-fn run_check(check: &str) -> Option<String> {
-    let out = Command::new("bash").arg("-lc").arg(check).output().ok()?;
+fn run_check(check: &str, exec: &Exec) -> Option<String> {
+    let out = build_command(exec, check).output().ok()?;
     if out.status.success() {
         let detail = String::from_utf8_lossy(&out.stdout).trim().to_string();
         Some(if detail.is_empty() { "installed".into() } else { detail })
@@ -282,19 +335,22 @@ fn run_check(check: &str) -> Option<String> {
 
 /// Runs install steps sequentially on a background thread, streaming output.
 /// In dry-run mode nothing is executed — each step's command is only printed.
-fn run_installer(work: Vec<(String, String)>, tx: Sender<Msg>, dry_run: bool) {
-    for (title, cmd) in work {
+fn run_installer(work: Vec<(String, String, Exec)>, tx: Sender<Msg>, dry_run: bool) {
+    for (title, cmd, exec) in work {
         let _ = tx.send(Msg::StepStart);
         if dry_run {
-            let _ = tx.send(Msg::Line(format!("[dry-run] {title} — would run:")));
+            let where_note = match &exec {
+                Exec::Bash => String::new(),
+                Exec::Wsl(d) => format!(" (in WSL: {d})"),
+                Exec::WinCmd => " (on Windows host)".to_string(),
+            };
+            let _ = tx.send(Msg::Line(format!("[dry-run] {title}{where_note} — would run:")));
             let _ = tx.send(Msg::Line(format!("  $ {cmd}")));
             thread::sleep(Duration::from_millis(400)); // let the UI show progress
             let _ = tx.send(Msg::StepDone(true));
             continue;
         }
-        let ok = match Command::new("bash")
-            .arg("-lc")
-            .arg(&cmd)
+        let ok = match build_command(&exec, &cmd)
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -381,9 +437,38 @@ fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, dry_run: bool)
                 }
                 KeyCode::Enter => {
                     if app.welcome_btn == 0 {
-                        app.start_scan();
+                        // On a Windows host, pick the WSL distro first.
+                        if app.platform.windows_host() && app.platform.wsl_distro.is_none() {
+                            app.distros = Platform::wsl_distros();
+                            app.distro_cursor = 0;
+                            app.screen = Screen::Distro;
+                        } else {
+                            app.start_scan();
+                        }
                     } else {
                         return Ok(());
+                    }
+                }
+                _ => {}
+            },
+            Screen::Distro => match key.code {
+                KeyCode::Char('q') => return Ok(()),
+                KeyCode::Esc => app.screen = Screen::Welcome,
+                KeyCode::Up | KeyCode::Char('k') => {
+                    if !app.distros.is_empty() {
+                        app.distro_cursor = (app.distro_cursor + app.distros.len() - 1)
+                            % app.distros.len();
+                    }
+                }
+                KeyCode::Down | KeyCode::Char('j') => {
+                    if !app.distros.is_empty() {
+                        app.distro_cursor = (app.distro_cursor + 1) % app.distros.len();
+                    }
+                }
+                KeyCode::Enter => {
+                    if let Some(d) = app.distros.get(app.distro_cursor) {
+                        app.platform.wsl_distro = Some(d.clone());
+                        app.start_scan();
                     }
                 }
                 _ => {}
@@ -442,10 +527,49 @@ fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, dry_run: bool)
 fn draw(f: &mut Frame, app: &mut App) {
     match app.screen {
         Screen::Welcome => draw_welcome(f, app),
+        Screen::Distro => draw_distro(f, app),
         Screen::Scan => draw_scan(f, app),
         Screen::Install => draw_install(f, app),
         Screen::Summary => draw_summary(f, app),
     }
+}
+
+fn draw_distro(f: &mut Frame, app: &App) {
+    let (body, footer) = chrome(f, app, "Choose a WSL distro");
+
+    if app.distros.is_empty() {
+        f.render_widget(
+            Paragraph::new(
+                "No WSL distros found.\n\nInstall one first (in PowerShell):\n  wsl --install -d Ubuntu\n\nthen restart this tool.",
+            )
+            .style(theme::bad())
+            .wrap(Wrap { trim: false })
+            .block(Block::default().borders(Borders::ALL).border_style(theme::border())),
+            body,
+        );
+        hint(f, footer, "esc back · q quit");
+        return;
+    }
+
+    let items: Vec<ListItem> = app
+        .distros
+        .iter()
+        .map(|d| ListItem::new(format!("  {d}")))
+        .collect();
+    let list = List::new(items)
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_style(theme::border())
+                .title(" Dev tools will be installed inside this distro "),
+        )
+        .highlight_style(theme::highlight())
+        .highlight_symbol(" > ");
+    let mut state = ListState::default();
+    state.select(Some(app.distro_cursor));
+    f.render_stateful_widget(list, body, &mut state);
+
+    hint(f, footer, "↑/↓ move · enter select · esc back · q quit");
 }
 
 fn draw_welcome(f: &mut Frame, app: &App) {
@@ -563,9 +687,11 @@ fn scan_line<'a>(app: &'a App, i: usize) -> Line<'a> {
     } else {
         "[ ] "
     };
+    let star = if sw.preferred { "★ preferred  " } else { "" };
     Line::from(vec![
         Span::styled(format!(" {mark}"), theme::border()),
         Span::styled(format!("{:<20}", sw.name), Style::new().bold()),
+        Span::styled(star, theme::title()),
         Span::styled(icon, style),
     ])
 }

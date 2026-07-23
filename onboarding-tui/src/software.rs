@@ -1,19 +1,26 @@
 //! The software registry — THE one place to add or remove tools.
 //!
 //! Each entry is a [`Software`] with:
-//!   - `section`: which part of the scan screen it appears under —
-//!     `Section::Ai` (optional, multi-select) or `Section::Required`
-//!     (always installed when missing, cannot be deselected)
-//!   - `check`: a read-only shell command that succeeds (exit 0) and prints a
+//!   - `section`: which box it appears in — `Editors` (pick at least one),
+//!     `Ai` (optional multi-select), or `Required` (locked in when missing)
+//!   - `preferred`: shows a ★ preferred tag in the UI
+//!   - `location`: where it lives — `Dev` tools go in the dev environment
+//!     (local shell on macOS/Linux, INSIDE the chosen WSL distro when the TUI
+//!     runs on a Windows host); `Host` apps are GUI programs that must land on
+//!     the host system (installed via winget on Windows, brew casks on macOS)
+//!   - `winget_id`: the winget package id used when installing a `Host` app
+//!     from a Windows host
+//!   - `check`: a read-only command that succeeds (exit 0) and prints a
 //!     version/detail line iff the tool is already installed
-//!   - `install`: idempotent, NON-interactive shell steps (per platform)
+//!   - `install`: idempotent, NON-interactive steps (per platform)
 //!   - `follow_up`: commands the user must run themselves afterwards
-//!     (interactive logins, shell-rc reloads, ...)
 //!
-//! To add a tool: append one `Software` to the Vec in [`registry`].
-//! To remove one: delete its block. Nothing else needs to change — the UI,
-//! scanner, and installer all iterate over this list. Items install in
-//! registry order, so put dependencies (e.g. Node.js before pnpm) first.
+//! To add a tool: append one `Software` to the Vec in [`registry`] — set only
+//! the fields you need and end with `..Software::default()`. To remove one:
+//! delete its block. The UI, scanner, and installer all iterate this list.
+//! Items install in registry order, so put dependencies (Node before pnpm)
+//! first. A GUI app that must live on the Windows host (e.g. Yaak) is just
+//! `location: Location::Host` plus its `winget_id`.
 
 use crate::detect::{Platform, PkgManager};
 
@@ -34,6 +41,14 @@ impl Section {
     }
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum Location {
+    /// Dev-environment tool: local shell, or inside the WSL distro on Windows.
+    Dev,
+    /// Host GUI app: winget on a Windows host, cask on macOS.
+    Host,
+}
+
 pub struct Step {
     pub title: &'static str,
     pub cmd: String,
@@ -43,9 +58,28 @@ pub struct Software {
     pub name: &'static str,
     pub description: &'static str,
     pub section: Section,
+    pub preferred: bool,
+    pub location: Location,
+    pub winget_id: Option<&'static str>,
     pub check: String,
     pub install: Vec<Step>,
     pub follow_up: Vec<&'static str>,
+}
+
+impl Default for Software {
+    fn default() -> Self {
+        Software {
+            name: "",
+            description: "",
+            section: Section::Required,
+            preferred: false,
+            location: Location::Dev,
+            winget_id: None,
+            check: String::new(),
+            install: Vec::new(),
+            follow_up: Vec::new(),
+        }
+    }
 }
 
 /// `command -v <probe> || <brew|apt install>` for simple package-manager tools.
@@ -72,6 +106,7 @@ fn script_install(probe: &str, url: &str) -> String {
 #[allow(clippy::vec_init_then_push)]
 pub fn registry(p: &Platform) -> Vec<Software> {
     let mut list = Vec::new();
+    let windows_host = p.windows_host();
 
     // =======================================================================
     // Code editors (multi-select, at least one required)
@@ -81,6 +116,8 @@ pub fn registry(p: &Platform) -> Vec<Software> {
         name: "VS Code",
         description: "Visual Studio Code — the most common choice, big extension ecosystem",
         section: Section::Editors,
+        location: Location::Host,
+        winget_id: Some("Microsoft.VisualStudioCode"),
         check: match p.pkg {
             PkgManager::Brew => r#"test -d "/Applications/Visual Studio Code.app" && echo "VS Code installed" || code --version | head -1"#.into(),
             PkgManager::Apt => "code --version | head -1".into(),
@@ -92,13 +129,15 @@ pub fn registry(p: &Platform) -> Vec<Software> {
                 PkgManager::Apt => r#"command -v code >/dev/null 2>&1 || { curl -fsSL https://packages.microsoft.com/keys/microsoft.asc | sudo gpg --dearmor -o /usr/share/keyrings/ms-vscode-keyring.gpg && echo "deb [signed-by=/usr/share/keyrings/ms-vscode-keyring.gpg] https://packages.microsoft.com/repos/code stable main" | sudo tee /etc/apt/sources.list.d/vscode.list && sudo apt-get update -y && sudo apt-get install -y code; }"#.into(),
             },
         }],
-        follow_up: vec![],
+        ..Software::default()
     });
 
     list.push(Software {
         name: "VSCodium",
         description: "VS Code without Microsoft telemetry/branding",
         section: Section::Editors,
+        location: Location::Host,
+        winget_id: Some("VSCodium.VSCodium"),
         check: match p.pkg {
             PkgManager::Brew => r#"test -d "/Applications/VSCodium.app" && echo "VSCodium installed" || codium --version | head -1"#.into(),
             PkgManager::Apt => "codium --version | head -1".into(),
@@ -110,22 +149,24 @@ pub fn registry(p: &Platform) -> Vec<Software> {
                 PkgManager::Apt => r#"command -v codium >/dev/null 2>&1 || { curl -fsSL https://gitlab.com/paulcarroty/vscodium-deb-rpm-repo/raw/master/pub.gpg | sudo gpg --dearmor -o /usr/share/keyrings/vscodium-archive-keyring.gpg && echo "deb [signed-by=/usr/share/keyrings/vscodium-archive-keyring.gpg] https://download.vscodium.com/debs vscodium main" | sudo tee /etc/apt/sources.list.d/vscodium.list && sudo apt-get update -y && sudo apt-get install -y codium; }"#.into(),
             },
         }],
-        follow_up: vec![],
+        ..Software::default()
     });
 
-    // Desktop app (macOS cask); WSL/Linux users generally run the Windows/
-    // native build outside the terminal — only offered on macOS.
-    if p.pkg == PkgManager::Brew {
+    // Desktop app: macOS cask or Windows-host winget (no Linux build offered).
+    if p.pkg == PkgManager::Brew || windows_host {
         list.push(Software {
             name: "Cursor",
             description: "Cursor — AI-first VS Code fork (editor app; CLI is under AI Tools)",
             section: Section::Editors,
+            preferred: true,
+            location: Location::Host,
+            winget_id: Some("Anysphere.Cursor"),
             check: r#"test -d "/Applications/Cursor.app" && echo "Cursor installed""#.into(),
             install: vec![Step {
                 title: "Install Cursor",
                 cmd: r#"test -d "/Applications/Cursor.app" || brew install --cask cursor"#.into(),
             }],
-            follow_up: vec![],
+            ..Software::default()
         });
     }
 
@@ -138,7 +179,7 @@ pub fn registry(p: &Platform) -> Vec<Software> {
             title: "Install Neovim",
             cmd: pkg_install(p, "neovim", "neovim", "nvim"),
         }],
-        follow_up: vec![],
+        ..Software::default()
     });
 
     list.push(Software {
@@ -153,13 +194,16 @@ pub fn registry(p: &Platform) -> Vec<Software> {
                 PkgManager::Apt => r#"command -v hx >/dev/null 2>&1 || { sudo apt-get install -y software-properties-common && sudo add-apt-repository -y ppa:maveonair/helix-editor && sudo apt-get update -y && sudo apt-get install -y helix; }"#.into(),
             },
         }],
-        follow_up: vec![],
+        ..Software::default()
     });
 
     list.push(Software {
         name: "Zed",
         description: "Zed — fast collaborative editor by the Atom team",
         section: Section::Editors,
+        preferred: true,
+        location: Location::Host,
+        winget_id: Some("ZedIndustries.Zed"),
         check: match p.pkg {
             PkgManager::Brew => r#"test -d "/Applications/Zed.app" && echo "Zed installed" || zed --version | head -1"#.into(),
             PkgManager::Apt => r#"export PATH="$HOME/.local/bin:$PATH"; zed --version | head -1"#.into(),
@@ -171,7 +215,7 @@ pub fn registry(p: &Platform) -> Vec<Software> {
                 PkgManager::Apt => script_install("zed", "https://zed.dev/install.sh"),
             },
         }],
-        follow_up: vec![],
+        ..Software::default()
     });
 
     // =======================================================================
@@ -188,6 +232,7 @@ pub fn registry(p: &Platform) -> Vec<Software> {
             cmd: script_install("cursor-agent", "https://cursor.com/install"),
         }],
         follow_up: vec!["cursor-agent login"],
+        ..Software::default()
     });
 
     list.push(Software {
@@ -203,6 +248,7 @@ pub fn registry(p: &Platform) -> Vec<Software> {
             },
         }],
         follow_up: vec!["opencode auth login"],
+        ..Software::default()
     });
 
     list.push(Software {
@@ -215,6 +261,7 @@ pub fn registry(p: &Platform) -> Vec<Software> {
             cmd: script_install("claude", "https://claude.ai/install.sh"),
         }],
         follow_up: vec!["claude   # log in on first run"],
+        ..Software::default()
     });
 
     list.push(Software {
@@ -230,6 +277,7 @@ pub fn registry(p: &Platform) -> Vec<Software> {
             },
         }],
         follow_up: vec!["codex login"],
+        ..Software::default()
     });
 
     // =======================================================================
@@ -237,17 +285,17 @@ pub fn registry(p: &Platform) -> Vec<Software> {
     // =======================================================================
 
     // -- Homebrew (macOS only) ----------------------------------------------
-    if p.pkg == PkgManager::Brew {
+    if p.pkg == PkgManager::Brew && !windows_host {
         list.push(Software {
             name: "Homebrew",
             description: "macOS package manager — everything else installs through it",
-            section: Section::Required,
             check: "brew --version | head -1".into(),
             install: vec![Step {
                 title: "Install Homebrew (non-interactive)",
                 cmd: r#"command -v brew >/dev/null 2>&1 || { curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh -o /tmp/brew-install.sh && NONINTERACTIVE=1 /bin/bash /tmp/brew-install.sh; }"#.into(),
             }],
             follow_up: vec![r#"eval "$(/opt/homebrew/bin/brew shellenv)"   # then reopen your terminal"#],
+            ..Software::default()
         });
     }
 
@@ -255,7 +303,6 @@ pub fn registry(p: &Platform) -> Vec<Software> {
     list.push(Software {
         name: "GitHub CLI + git",
         description: "git version control and gh for GitHub auth/cloning",
-        section: Section::Required,
         check: r#"git --version && gh --version | head -1"#.into(),
         install: vec![
             Step { title: "Install git", cmd: pkg_install(p, "git", "git", "git") },
@@ -266,20 +313,22 @@ pub fn registry(p: &Platform) -> Vec<Software> {
             "git config --global user.email \"you@auburn.edu\"",
             "gh auth login --git-protocol ssh   # interactive browser login",
         ],
+        ..Software::default()
     });
 
-    // -- Linear (desktop app; macOS only) -----------------------------------
-    if p.pkg == PkgManager::Brew {
+    // -- Linear (desktop app; macOS + Windows host) --------------------------
+    if p.pkg == PkgManager::Brew || windows_host {
         list.push(Software {
             name: "Linear",
             description: "Linear desktop app — lab issue tracking",
-            section: Section::Required,
+            location: Location::Host,
+            winget_id: Some("Linear.Linear"),
             check: r#"test -d "/Applications/Linear.app" && echo "Linear.app installed""#.into(),
             install: vec![Step {
                 title: "Install Linear",
                 cmd: r#"test -d "/Applications/Linear.app" || brew install --cask linear-linear"#.into(),
             }],
-            follow_up: vec![],
+            ..Software::default()
         });
     }
 
@@ -287,7 +336,6 @@ pub fn registry(p: &Platform) -> Vec<Software> {
     list.push(Software {
         name: "Vault",
         description: "HashiCorp Vault CLI — lab secrets",
-        section: Section::Required,
         check: "vault --version".into(),
         install: vec![Step {
             title: "Install Vault",
@@ -296,37 +344,35 @@ pub fn registry(p: &Platform) -> Vec<Software> {
                 PkgManager::Apt => r#"command -v vault >/dev/null 2>&1 || { curl -fsSL https://apt.releases.hashicorp.com/gpg | sudo gpg --dearmor -o /usr/share/keyrings/hashicorp-archive-keyring.gpg && echo "deb [signed-by=/usr/share/keyrings/hashicorp-archive-keyring.gpg] https://apt.releases.hashicorp.com $(lsb_release -cs) main" | sudo tee /etc/apt/sources.list.d/hashicorp.list && sudo apt-get update -y && sudo apt-get install -y vault; }"#.into(),
             },
         }],
-        follow_up: vec![],
+        ..Software::default()
     });
 
     // -- Go -----------------------------------------------------------------
     list.push(Software {
         name: "Go",
         description: "Go toolchain for lab services",
-        section: Section::Required,
         check: "go version".into(),
         install: vec![Step { title: "Install Go", cmd: pkg_install(p, "go", "golang-go", "go") }],
-        follow_up: vec![],
+        ..Software::default()
     });
 
     // -- Rust ---------------------------------------------------------------
     list.push(Software {
         name: "Rust",
         description: "rustc + cargo via rustup",
-        section: Section::Required,
         check: r#". "$HOME/.cargo/env" 2>/dev/null; rustc --version"#.into(),
         install: vec![Step {
             title: "Install rustup toolchain",
             cmd: r#"[ -x "$HOME/.cargo/bin/rustc" ] || { curl --proto '=https' --tlsv1.2 -fsSL https://sh.rustup.rs -o /tmp/rustup-init.sh && sh /tmp/rustup-init.sh -y --no-modify-path; }"#.into(),
         }],
         follow_up: vec![r#"echo '. "$HOME/.cargo/env"' >> ~/.zshrc"#],
+        ..Software::default()
     });
 
     // -- Node.js (fnm) ------------------------------------------------------
     list.push(Software {
         name: "Node.js",
         description: "Node LTS via fnm — for React/TS apps",
-        section: Section::Required,
         check: r#"export PATH="$HOME/.local/share/fnm:$PATH"; eval "$(fnm env 2>/dev/null)"; node --version"#.into(),
         install: vec![
             Step {
@@ -342,35 +388,53 @@ pub fn registry(p: &Platform) -> Vec<Software> {
             },
         ],
         follow_up: vec![r#"echo 'eval "$(fnm env --use-on-cd)"' >> ~/.zshrc   # node in new shells"#],
+        ..Software::default()
     });
 
     // -- Bun ----------------------------------------------------------------
     list.push(Software {
         name: "Bun",
         description: "bun — fast JS runtime/bundler used by some lab projects",
-        section: Section::Required,
         check: r#"export PATH="$HOME/.bun/bin:$PATH"; bun --version"#.into(),
         install: vec![Step {
             title: "Install Bun",
             cmd: r#"export PATH="$HOME/.bun/bin:$PATH"; command -v bun >/dev/null 2>&1 || { curl -fsSL https://bun.sh/install -o /tmp/bun-install.sh && bash /tmp/bun-install.sh; }"#.into(),
         }],
-        follow_up: vec![],
+        ..Software::default()
     });
 
     // -- pnpm ---------------------------------------------------------------
     list.push(Software {
         name: "pnpm",
         description: "pnpm package manager (via corepack — needs Node.js)",
-        section: Section::Required,
         check: r#"export PATH="$HOME/.local/share/fnm:$PATH"; eval "$(fnm env 2>/dev/null)"; pnpm --version"#.into(),
         install: vec![Step {
             title: "Enable pnpm via corepack",
             cmd: r#"export PATH="$HOME/.local/share/fnm:$PATH"; eval "$(fnm env)"; corepack enable pnpm"#.into(),
         }],
-        follow_up: vec![],
+        ..Software::default()
     });
 
     // ---- Add new software above this line ---------------------------------
+    // Host GUI apps (e.g. Yaak) → location: Location::Host + winget_id.
+
+    // On a Windows host, Host apps check/install through winget instead of
+    // the brew/apt commands written above.
+    if windows_host {
+        for sw in &mut list {
+            if sw.location == Location::Host {
+                if let Some(id) = sw.winget_id {
+                    sw.check = format!("winget list -e --id {id}");
+                    sw.install = vec![Step {
+                        title: "Install via winget",
+                        cmd: format!(
+                            "winget install -e --id {id} --accept-package-agreements --accept-source-agreements"
+                        ),
+                    }];
+                }
+            }
+        }
+    }
 
     list
 }
