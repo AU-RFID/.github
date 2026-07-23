@@ -128,9 +128,18 @@ impl App {
         let checks: Vec<String> = self.items.iter().map(|s| s.check.clone()).collect();
         let (tx, rx) = mpsc::channel();
         self.rx = Some(rx);
+        let dry_run = self.dry_run;
         thread::spawn(move || {
             for (i, check) in checks.iter().enumerate() {
-                let _ = tx.send(Msg::Check(i, run_check(check)));
+                // Dry run: pretend nothing is installed so the full first-day
+                // flow (everything missing → install → summary) can be previewed.
+                let result = if dry_run {
+                    thread::sleep(Duration::from_millis(200)); // keep the checking… animation visible
+                    None
+                } else {
+                    run_check(check)
+                };
+                let _ = tx.send(Msg::Check(i, result));
             }
             let _ = tx.send(Msg::ScanDone);
         });
@@ -204,12 +213,21 @@ impl App {
         }
         if install_done {
             self.rx = None;
-            // Re-check everything so the summary shows the real post-install state.
-            for i in 0..self.items.len() {
-                self.states[i] = match run_check(&self.items[i].check) {
-                    Some(d) => ItemState::Installed(d),
-                    None => ItemState::Missing,
-                };
+            if self.dry_run {
+                // Preview the happy path: everything just "installed" succeeds.
+                for i in 0..self.items.len() {
+                    if self.selected[i] {
+                        self.states[i] = ItemState::Installed("(dry-run)".into());
+                    }
+                }
+            } else {
+                // Re-check everything so the summary shows the real post-install state.
+                for i in 0..self.items.len() {
+                    self.states[i] = match run_check(&self.items[i].check) {
+                        Some(d) => ItemState::Installed(d),
+                        None => ItemState::Missing,
+                    };
+                }
             }
             self.screen = Screen::Summary;
         }
