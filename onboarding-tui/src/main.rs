@@ -28,13 +28,6 @@ use ratatui::widgets::{Block, Borders, List, ListItem, ListState, Paragraph, Wra
 use detect::{detect, Platform};
 use software::{registry, Section, Software};
 
-/// One visual row on the Scan screen: a section header or a software item
-/// (indexing into `App::items`). Headers are skipped by cursor movement.
-enum Row {
-    Header(&'static str),
-    Item(usize),
-}
-
 const LOGO: [&str; 6] = [
     "██████╗ ███████╗██╗██████╗   ██╗      █████╗ ██████╗ ",
     "██╔══██╗██╔════╝██║██╔══██╗  ██║     ██╔══██╗██╔══██╗",
@@ -79,12 +72,15 @@ struct App {
     dry_run: bool,
     platform: Platform,
     items: Vec<Software>,
-    rows: Vec<Row>,
+    /// Item indices shown in the AI Tools box, then the Required box.
+    order_ai: Vec<usize>,
+    order_req: Vec<usize>,
+    /// Cursor position over the combined display order (AI first, then Required).
+    cursor: usize,
     states: Vec<ItemState>,
     selected: Vec<bool>,
     screen: Screen,
     welcome_btn: usize, // 0 = Get Started, 1 = Exit
-    list_state: ListState,
     scan_done: bool,
     steps: Vec<StepStatus>,
     current_step: usize,
@@ -99,32 +95,23 @@ impl App {
         let items = registry(&platform);
         let n = items.len();
 
-        // Build the sectioned row list once; both sections come straight from
-        // the registry, so software.rs stays the single source of truth.
-        let mut rows = Vec::new();
-        for section in [Section::Ai, Section::Required] {
-            rows.push(Row::Header(section.title()));
-            for (i, sw) in items.iter().enumerate() {
-                if sw.section == section {
-                    rows.push(Row::Item(i));
-                }
-            }
-        }
+        // Split the registry into the two boxes; software.rs stays the single
+        // source of truth for which tool belongs where.
+        let order_ai: Vec<usize> = (0..n).filter(|&i| items[i].section == Section::Ai).collect();
+        let order_req: Vec<usize> =
+            (0..n).filter(|&i| items[i].section == Section::Required).collect();
 
-        let mut list_state = ListState::default();
-        // Start on the first selectable (non-header) row.
-        let first_item = rows.iter().position(|r| matches!(r, Row::Item(_))).unwrap_or(0);
-        list_state.select(Some(first_item));
         App {
             dry_run,
             platform,
             items,
-            rows,
+            order_ai,
+            order_req,
+            cursor: 0,
             states: vec![ItemState::Checking; n],
             selected: vec![false; n],
             screen: Screen::Welcome,
             welcome_btn: 0,
-            list_state,
             scan_done: false,
             steps: Vec::new(),
             current_step: 0,
@@ -228,27 +215,21 @@ impl App {
         }
     }
 
-    /// Move the Scan-screen cursor, skipping section headers.
+    /// Move the Scan-screen cursor across both boxes (AI Tools then Required).
     fn move_row(&mut self, delta: i32) {
-        let len = self.rows.len() as i32;
+        let len = (self.order_ai.len() + self.order_req.len()) as i32;
         if len == 0 {
             return;
         }
-        let mut idx = self.list_state.selected().unwrap_or(0) as i32;
-        loop {
-            idx = (idx + delta).rem_euclid(len);
-            if matches!(self.rows[idx as usize], Row::Item(_)) {
-                break;
-            }
-        }
-        self.list_state.select(Some(idx as usize));
+        self.cursor = (self.cursor as i32 + delta).rem_euclid(len) as usize;
     }
 
-    /// The software item under the Scan-screen cursor, if any.
+    /// The software item under the Scan-screen cursor.
     fn cursor_item(&self) -> Option<usize> {
-        match self.rows.get(self.list_state.selected()?)? {
-            Row::Item(i) => Some(*i),
-            Row::Header(_) => None,
+        if self.cursor < self.order_ai.len() {
+            self.order_ai.get(self.cursor).copied()
+        } else {
+            self.order_req.get(self.cursor - self.order_ai.len()).copied()
         }
     }
 }
@@ -512,58 +493,78 @@ fn hint(f: &mut Frame, area: Rect, text: &str) {
     f.render_widget(Paragraph::new(text).style(theme::dim()), area);
 }
 
-fn draw_scan(f: &mut Frame, app: &mut App) {
-    let (body, footer) = chrome(f, app, "What you have vs. what we use");
+/// Build the display line for one software item (Ubuntu-installer style:
+/// `[X]` selected, `[ ]` unselected, locked `[X]` for required-missing).
+fn scan_line<'a>(app: &'a App, i: usize) -> Line<'a> {
+    let sw = &app.items[i];
+    let (icon, style) = match &app.states[i] {
+        ItemState::Checking => ("⏳ checking…".to_string(), theme::dim()),
+        ItemState::Installed(d) => (format!("✓ {d}"), theme::good()),
+        ItemState::Missing => ("✗ missing".to_string(), theme::bad()),
+    };
+    // Checkbox: optional missing tools toggle with space; required missing
+    // tools are locked in; installed tools have nothing to pick.
+    let mark = if !app.scan_done || !matches!(app.states[i], ItemState::Missing) {
+        "    "
+    } else if sw.section == Section::Required || app.selected[i] {
+        "[X] " // required-missing is locked in; optional shows its toggle state
+    } else {
+        "[ ] "
+    };
+    Line::from(vec![
+        Span::styled(format!(" {mark}"), theme::border()),
+        Span::styled(format!("{:<20}", sw.name), Style::new().bold()),
+        Span::styled(icon, style),
+    ])
+}
 
-    let items: Vec<ListItem> = app
-        .rows
-        .iter()
-        .map(|row| match row {
-            Row::Header(title) => ListItem::new(Line::styled(
-                format!("─{title}{}", "─".repeat(40_usize.saturating_sub(title.len()))),
-                theme::title(),
-            )),
-            Row::Item(i) => {
-                let i = *i;
-                let sw = &app.items[i];
-                let (icon, style) = match &app.states[i] {
-                    ItemState::Checking => ("⏳ checking…".to_string(), theme::dim()),
-                    ItemState::Installed(d) => (format!("✓ {d}"), theme::good()),
-                    ItemState::Missing => ("✗ missing".to_string(), theme::bad()),
-                };
-                // Checkbox: optional missing tools toggle; required missing
-                // tools are locked; installed tools have nothing to pick.
-                let mark = if !app.scan_done || !matches!(app.states[i], ItemState::Missing) {
-                    "    ".to_string()
-                } else if sw.section == Section::Required {
-                    "[✔] ".to_string() // required — always installed
-                } else if app.selected[i] {
-                    "[x] ".to_string()
-                } else {
-                    "[ ] ".to_string()
-                };
-                ListItem::new(Line::from(vec![
-                    Span::styled(format!(" {mark}"), theme::border()),
-                    Span::styled(format!("{:<20}", sw.name), Style::new().bold()),
-                    Span::styled(icon, style),
-                ]))
-            }
-        })
-        .collect();
-
-    let [list_area, detail_area] =
-        Layout::vertical([Constraint::Min(4), Constraint::Length(4)]).areas(body);
-
+/// Render one section box (AI Tools / Required) with its own border and
+/// title, highlighting the row under the global cursor when it's inside.
+fn scan_box(f: &mut Frame, app: &App, area: Rect, title: &str, order: &[usize], cursor: Option<usize>) {
+    let items: Vec<ListItem> = order.iter().map(|&i| ListItem::new(scan_line(app, i))).collect();
     let list = List::new(items)
         .block(
             Block::default()
                 .borders(Borders::ALL)
                 .border_style(theme::border())
-                .title(" Software "),
+                .title(title.to_string()),
         )
         .highlight_style(theme::highlight())
         .highlight_symbol(" > ");
-    f.render_stateful_widget(list, list_area, &mut app.list_state);
+    let mut state = ListState::default();
+    state.select(cursor);
+    f.render_stateful_widget(list, area, &mut state);
+}
+
+fn draw_scan(f: &mut Frame, app: &mut App) {
+    let (body, footer) = chrome(f, app, "What you have vs. what we use");
+
+    let ai_h = app.order_ai.len() as u16 + 2;
+    let req_h = app.order_req.len() as u16 + 2;
+    let [ai_area, req_area, detail_area] = Layout::vertical([
+        Constraint::Length(ai_h),
+        Constraint::Length(req_h),
+        Constraint::Length(4),
+    ])
+    .areas(body);
+
+    let in_ai = app.cursor < app.order_ai.len();
+    scan_box(
+        f,
+        app,
+        ai_area,
+        Section::Ai.title(),
+        &app.order_ai,
+        in_ai.then_some(app.cursor),
+    );
+    scan_box(
+        f,
+        app,
+        req_area,
+        Section::Required.title(),
+        &app.order_req,
+        (!in_ai).then_some(app.cursor - app.order_ai.len()),
+    );
 
     // Description of the highlighted item.
     let desc = app

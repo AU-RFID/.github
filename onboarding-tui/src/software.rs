@@ -26,7 +26,7 @@ pub enum Section {
 impl Section {
     pub fn title(&self) -> &'static str {
         match self {
-            Section::Ai => " AI Tools — optional, pick what you like ",
+            Section::Ai => " AI Tools — optional ",
             Section::Required => " Required ",
         }
     }
