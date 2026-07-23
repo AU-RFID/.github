@@ -103,11 +103,9 @@ struct App {
     dry_run: bool,
     platform: Platform,
     items: Vec<Software>,
-    /// Item indices per box, in display order (Editors, Containers, AI, Required).
-    order_editors: Vec<usize>,
-    order_containers: Vec<usize>,
-    order_ai: Vec<usize>,
-    order_req: Vec<usize>,
+    /// One box per non-empty section, in `Section::ALL` order — the scan
+    /// screen's layout. Each holds the item indices shown in that box.
+    boxes: Vec<(Section, Vec<usize>)>,
     /// Cursor position over the combined display order across all boxes.
     cursor: usize,
     /// One-shot warning shown in the footer (e.g. "pick an editor").
@@ -133,24 +131,22 @@ impl App {
         let items = registry(&platform);
         let n = items.len();
 
-        // Split the registry into the boxes; software.rs stays the single
-        // source of truth for which tool belongs where.
-        let by_section = |s: Section| -> Vec<usize> {
-            (0..n).filter(|&i| items[i].section == s).collect()
-        };
-        let order_editors = by_section(Section::Editors);
-        let order_containers = by_section(Section::Containers);
-        let order_ai = by_section(Section::Ai);
-        let order_req = by_section(Section::Required);
+        // Split the registry into boxes; software.rs (Section::ALL + each
+        // item's section) stays the single source of truth. Empty sections
+        // are dropped so no blank boxes render.
+        let boxes: Vec<(Section, Vec<usize>)> = Section::ALL
+            .iter()
+            .filter_map(|&s| {
+                let order: Vec<usize> = (0..n).filter(|&i| items[i].section == s).collect();
+                (!order.is_empty()).then_some((s, order))
+            })
+            .collect();
 
         App {
             dry_run,
             platform,
             items,
-            order_editors,
-            order_containers,
-            order_ai,
-            order_req,
+            boxes,
             cursor: 0,
             notice: None,
             distros: Vec::new(),
@@ -282,20 +278,14 @@ impl App {
         }
     }
 
-    /// Item-index boxes in display order — the single place that defines the
-    /// scan screen's box sequence.
-    fn box_orders(&self) -> [&Vec<usize>; 4] {
-        [
-            &self.order_editors,
-            &self.order_containers,
-            &self.order_ai,
-            &self.order_req,
-        ]
+    /// Total number of selectable rows across every box.
+    fn total_rows(&self) -> usize {
+        self.boxes.iter().map(|(_, o)| o.len()).sum()
     }
 
     /// Move the Scan-screen cursor across all boxes.
     fn move_row(&mut self, delta: i32) {
-        let len: usize = self.box_orders().iter().map(|o| o.len()).sum();
+        let len = self.total_rows();
         if len == 0 {
             return;
         }
@@ -305,7 +295,7 @@ impl App {
     /// The software item under the Scan-screen cursor.
     fn cursor_item(&self) -> Option<usize> {
         let mut c = self.cursor;
-        for order in self.box_orders() {
+        for (_, order) in &self.boxes {
             if c < order.len() {
                 return order.get(c).copied();
             }
@@ -331,8 +321,9 @@ impl App {
 
     /// At least one editor must end up on the machine: already installed or selected.
     fn editor_picked(&self) -> bool {
-        self.order_editors.iter().any(|&i| {
-            matches!(self.states[i], ItemState::Installed(_)) || self.selected[i]
+        self.items.iter().enumerate().any(|(i, sw)| {
+            sw.section == Section::Editors
+                && (matches!(self.states[i], ItemState::Installed(_)) || self.selected[i])
         })
     }
 }
@@ -731,29 +722,58 @@ fn scan_box(f: &mut Frame, app: &App, area: Rect, title: &str, order: &[usize], 
 fn draw_scan(f: &mut Frame, app: &mut App) {
     let (body, footer) = chrome(f, app, "What you have vs. what we use");
 
-    // One box per section, each sized to its contents; About pane at the end.
-    let boxes: [(&str, &Vec<usize>); 4] = [
-        (Section::Editors.title(), &app.order_editors),
-        (Section::Containers.title(), &app.order_containers),
-        (Section::Ai.title(), &app.order_ai),
-        (Section::Required.title(), &app.order_req),
-    ];
-    let mut constraints: Vec<Constraint> =
-        boxes.iter().map(|(_, o)| Constraint::Length(o.len() as u16 + 2)).collect();
-    constraints.push(Constraint::Length(4)); // About pane
-    let areas = Layout::vertical(constraints).split(body);
+    // Split: boxes region on top, fixed About pane at the bottom.
+    let [boxes_area, detail_area] =
+        Layout::vertical([Constraint::Min(3), Constraint::Length(4)]).areas(body);
 
-    // One cursor spans the boxes; give each box its local offset (or None).
-    let mut rem = Some(app.cursor);
-    for (idx, (title, order)) in boxes.iter().enumerate() {
-        let local = rem.filter(|c| *c < order.len());
-        scan_box(f, app, areas[idx], title, order, local);
-        rem = match rem {
-            Some(c) if c >= order.len() => Some(c - order.len()),
-            _ => None, // cursor was in this box; no later box highlights
-        };
+    let heights: Vec<u16> = app.boxes.iter().map(|(_, o)| o.len() as u16 + 2).collect();
+
+    // Which box holds the cursor, and its offset within that box.
+    let (cur_box, cur_local) = {
+        let mut c = app.cursor;
+        let mut bi = 0;
+        for (i, (_, order)) in app.boxes.iter().enumerate() {
+            if c < order.len() {
+                bi = i;
+                break;
+            }
+            c -= order.len();
+        }
+        (bi, c)
+    };
+
+    // Scroll by whole boxes so the cursor's box is always fully visible.
+    let avail = boxes_area.height;
+    let last_fitting = |start: usize| -> usize {
+        let mut used = 0u16;
+        let mut last = start;
+        for (j, &h) in heights.iter().enumerate().skip(start) {
+            if used + h <= avail {
+                used += h;
+                last = j;
+            } else {
+                break;
+            }
+        }
+        last.max(start)
+    };
+    let mut start = 0usize;
+    while cur_box > last_fitting(start) {
+        start += 1;
     }
-    let detail_area = areas[boxes.len()];
+    let end = last_fitting(start); // inclusive
+
+    // Lay out the visible boxes plus a filler, then render each.
+    let mut constraints: Vec<Constraint> =
+        (start..=end).map(|j| Constraint::Length(heights[j])).collect();
+    constraints.push(Constraint::Min(0));
+    let areas = Layout::vertical(constraints).split(boxes_area);
+
+    for (slot, j) in (start..=end).enumerate() {
+        let (section, order) = &app.boxes[j];
+        let local = (j == cur_box).then_some(cur_local);
+        scan_box(f, app, areas[slot], section.title(), order, local);
+    }
 
     // Description of the highlighted item.
     let desc = app
@@ -771,11 +791,16 @@ fn draw_scan(f: &mut Frame, app: &mut App) {
         detail_area,
     );
 
+    let scroll = {
+        let up = if start > 0 { "▲" } else { " " };
+        let down = if end + 1 < app.boxes.len() { "▼" } else { " " };
+        format!("{up}{down}")
+    };
     if let Some(notice) = &app.notice {
         f.render_widget(Paragraph::new(format!(" ⚠ {notice}")).style(theme::bad()), footer);
     } else if app.scan_done {
         let n = app.selected.iter().filter(|s| **s).count();
-        hint(f, footer, &format!("space toggle · enter install {n} selected (required auto-included) · r rescan · esc back · q quit"));
+        hint(f, footer, &format!("{scroll} space toggle · enter install {n} selected · r rescan · esc back · q quit"));
     } else {
         hint(f, footer, "scanning your system…");
     }

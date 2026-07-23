@@ -28,6 +28,9 @@ use crate::detect::{Platform, PkgManager};
 pub enum Section {
     Editors,
     Containers,
+    Api,
+    Database,
+    GitTools,
     Ai,
     Required,
 }
@@ -37,10 +40,24 @@ impl Section {
         match self {
             Section::Editors => " Code Editors — pick at least one ",
             Section::Containers => " Docker / Kubernetes — optional ",
+            Section::Api => " API / HTTP Clients — optional ",
+            Section::Database => " Database Tools — optional ",
+            Section::GitTools => " Git Tools — optional ",
             Section::Ai => " AI Tools — optional ",
             Section::Required => " Required ",
         }
     }
+
+    /// Every section, in the order the scan screen shows them.
+    pub const ALL: [Section; 7] = [
+        Section::Editors,
+        Section::Containers,
+        Section::Api,
+        Section::Database,
+        Section::GitTools,
+        Section::Ai,
+        Section::Required,
+    ];
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -116,6 +133,14 @@ fn linux_arch(p: &Platform) -> &'static str {
 fn github_bin_install(probe: &str, repo: &str, asset: &str) -> String {
     format!(
         "command -v {probe} >/dev/null 2>&1 || {{ curl -fsSL https://github.com/{repo}/releases/latest/download/{asset} -o /tmp/{probe}.tgz && tar -xzf /tmp/{probe}.tgz -C /tmp {probe} && sudo install /tmp/{probe} /usr/local/bin/{probe}; }}"
+    )
+}
+
+/// Like [`github_bin_install`], but resolves the asset URL via the GitHub API
+/// (for projects whose asset names include the version, e.g. lazygit).
+fn github_api_bin_install(probe: &str, repo: &str, pattern: &str) -> String {
+    format!(
+        r#"command -v {probe} >/dev/null 2>&1 || {{ url=$(curl -fsSL https://api.github.com/repos/{repo}/releases/latest | grep browser_download_url | grep -i '{pattern}' | head -1 | cut -d'"' -f4) && curl -fsSL "$url" -o /tmp/{probe}.tgz && tar -xzf /tmp/{probe}.tgz -C /tmp {probe} && sudo install /tmp/{probe} /usr/local/bin/{probe}; }}"#
     )
 }
 
@@ -311,6 +336,141 @@ pub fn registry(p: &Platform) -> Vec<Software> {
             install: vec![Step {
                 title: "Install Lens",
                 cmd: r#"test -d "/Applications/Lens.app" || brew install --cask lens"#.into(),
+            }],
+            ..Software::default()
+        });
+    }
+
+    // =======================================================================
+    // API / HTTP clients (optional, multi-select — GUI apps)
+    // =======================================================================
+    if p.pkg == PkgManager::Brew || windows_host {
+        list.push(Software {
+            name: "Yaak",
+            description: "Yaak — modern desktop API client (REST/GraphQL/gRPC)",
+            section: Section::Api,
+            location: Location::Host,
+            winget_id: Some("Yaak.Yaak"),
+            check: r#"test -d "/Applications/Yaak.app" && echo "Yaak installed""#.into(),
+            install: vec![Step {
+                title: "Install Yaak",
+                cmd: r#"test -d "/Applications/Yaak.app" || brew install --cask yaak"#.into(),
+            }],
+            ..Software::default()
+        });
+
+        list.push(Software {
+            name: "Bruno",
+            description: "Bruno — open-source, git-friendly API client",
+            section: Section::Api,
+            location: Location::Host,
+            winget_id: Some("Bruno.Bruno"),
+            check: r#"test -d "/Applications/Bruno.app" && echo "Bruno installed""#.into(),
+            install: vec![Step {
+                title: "Install Bruno",
+                cmd: r#"test -d "/Applications/Bruno.app" || brew install --cask bruno"#.into(),
+            }],
+            ..Software::default()
+        });
+    }
+
+    // =======================================================================
+    // Database tools (optional, multi-select — GUI apps)
+    // =======================================================================
+    if p.pkg == PkgManager::Brew || windows_host {
+        list.push(Software {
+            name: "MySQL Workbench",
+            description: "MySQL Workbench — official MySQL GUI",
+            section: Section::Database,
+            location: Location::Host,
+            winget_id: Some("Oracle.MySQLWorkbench"),
+            check: r#"test -d "/Applications/MySQLWorkbench.app" && echo "MySQL Workbench installed""#.into(),
+            install: vec![Step {
+                title: "Install MySQL Workbench",
+                cmd: r#"test -d "/Applications/MySQLWorkbench.app" || brew install --cask mysqlworkbench"#.into(),
+            }],
+            ..Software::default()
+        });
+
+        list.push(Software {
+            name: "DBeaver",
+            description: "DBeaver Community — free cross-database GUI",
+            section: Section::Database,
+            location: Location::Host,
+            winget_id: Some("dbeaver.dbeaver"),
+            check: r#"test -d "/Applications/DBeaver.app" && echo "DBeaver installed""#.into(),
+            install: vec![Step {
+                title: "Install DBeaver",
+                cmd: r#"test -d "/Applications/DBeaver.app" || brew install --cask dbeaver-community"#.into(),
+            }],
+            ..Software::default()
+        });
+
+        list.push(Software {
+            name: "DataGrip",
+            description: "DataGrip — JetBrains database IDE (free for students)",
+            section: Section::Database,
+            location: Location::Host,
+            winget_id: Some("JetBrains.DataGrip"),
+            check: r#"test -d "/Applications/DataGrip.app" && echo "DataGrip installed""#.into(),
+            install: vec![Step {
+                title: "Install DataGrip",
+                cmd: r#"test -d "/Applications/DataGrip.app" || brew install --cask datagrip"#.into(),
+            }],
+            ..Software::default()
+        });
+    }
+
+    // =======================================================================
+    // Git tools (optional, multi-select)
+    // =======================================================================
+
+    // lazygit — Git TUI (cross-platform).
+    list.push(Software {
+        name: "lazygit",
+        description: "lazygit — terminal UI for git",
+        section: Section::GitTools,
+        check: "lazygit --version | head -1".into(),
+        install: vec![Step {
+            title: "Install lazygit",
+            cmd: match p.pkg {
+                PkgManager::Brew => "command -v lazygit >/dev/null 2>&1 || brew install lazygit".into(),
+                PkgManager::Apt => github_api_bin_install(
+                    "lazygit",
+                    "jesseduffield/lazygit",
+                    &format!("Linux_{}", if p.arch == "aarch64" { "arm64" } else { "x86_64" }),
+                ),
+            },
+        }],
+        ..Software::default()
+    });
+
+    // Tower and GitHub Desktop — GUI apps (macOS + Windows host).
+    if p.pkg == PkgManager::Brew || windows_host {
+        list.push(Software {
+            name: "Tower",
+            description: "Tower — polished git GUI client",
+            section: Section::GitTools,
+            location: Location::Host,
+            winget_id: Some("fournova.Tower"),
+            check: r#"test -d "/Applications/Tower.app" && echo "Tower installed""#.into(),
+            install: vec![Step {
+                title: "Install Tower",
+                cmd: r#"test -d "/Applications/Tower.app" || brew install --cask tower"#.into(),
+            }],
+            ..Software::default()
+        });
+
+        list.push(Software {
+            name: "GitHub Desktop",
+            description: "GitHub Desktop — beginner-friendly git GUI",
+            section: Section::GitTools,
+            location: Location::Host,
+            winget_id: Some("GitHub.GitHubDesktop"),
+            check: r#"test -d "/Applications/GitHub Desktop.app" && echo "GitHub Desktop installed""#.into(),
+            install: vec![Step {
+                title: "Install GitHub Desktop",
+                cmd: r#"test -d "/Applications/GitHub Desktop.app" || brew install --cask github"#.into(),
             }],
             ..Software::default()
         });
