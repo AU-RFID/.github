@@ -26,7 +26,14 @@ use ratatui::prelude::*;
 use ratatui::widgets::{Block, Borders, List, ListItem, ListState, Paragraph, Wrap};
 
 use detect::{detect, Platform};
-use software::{registry, Software};
+use software::{registry, Section, Software};
+
+/// One visual row on the Scan screen: a section header or a software item
+/// (indexing into `App::items`). Headers are skipped by cursor movement.
+enum Row {
+    Header(&'static str),
+    Item(usize),
+}
 
 const LOGO: [&str; 6] = [
     "██████╗ ███████╗██╗██████╗   ██╗      █████╗ ██████╗ ",
@@ -72,6 +79,7 @@ struct App {
     dry_run: bool,
     platform: Platform,
     items: Vec<Software>,
+    rows: Vec<Row>,
     states: Vec<ItemState>,
     selected: Vec<bool>,
     screen: Screen,
@@ -90,12 +98,28 @@ impl App {
         let platform = detect();
         let items = registry(&platform);
         let n = items.len();
+
+        // Build the sectioned row list once; both sections come straight from
+        // the registry, so software.rs stays the single source of truth.
+        let mut rows = Vec::new();
+        for section in [Section::Ai, Section::Required] {
+            rows.push(Row::Header(section.title()));
+            for (i, sw) in items.iter().enumerate() {
+                if sw.section == section {
+                    rows.push(Row::Item(i));
+                }
+            }
+        }
+
         let mut list_state = ListState::default();
-        list_state.select(Some(0));
+        // Start on the first selectable (non-header) row.
+        let first_item = rows.iter().position(|r| matches!(r, Row::Item(_))).unwrap_or(0);
+        list_state.select(Some(first_item));
         App {
             dry_run,
             platform,
             items,
+            rows,
             states: vec![ItemState::Checking; n],
             selected: vec![false; n],
             screen: Screen::Welcome,
@@ -168,9 +192,10 @@ impl App {
                 }
                 Msg::ScanDone => {
                     self.scan_done = true;
-                    // Preselect everything that's missing.
+                    // Required + missing → locked in. Optional (AI) starts unticked.
                     for (i, st) in self.states.iter().enumerate() {
-                        self.selected[i] = matches!(st, ItemState::Missing);
+                        self.selected[i] = matches!(st, ItemState::Missing)
+                            && self.items[i].section == Section::Required;
                     }
                     self.rx = None;
                     return;
@@ -200,6 +225,30 @@ impl App {
                 };
             }
             self.screen = Screen::Summary;
+        }
+    }
+
+    /// Move the Scan-screen cursor, skipping section headers.
+    fn move_row(&mut self, delta: i32) {
+        let len = self.rows.len() as i32;
+        if len == 0 {
+            return;
+        }
+        let mut idx = self.list_state.selected().unwrap_or(0) as i32;
+        loop {
+            idx = (idx + delta).rem_euclid(len);
+            if matches!(self.rows[idx as usize], Row::Item(_)) {
+                break;
+            }
+        }
+        self.list_state.select(Some(idx as usize));
+    }
+
+    /// The software item under the Scan-screen cursor, if any.
+    fn cursor_item(&self) -> Option<usize> {
+        match self.rows.get(self.list_state.selected()?)? {
+            Row::Item(i) => Some(*i),
+            Row::Header(_) => None,
         }
     }
 }
@@ -315,12 +364,18 @@ fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, dry_run: bool)
             Screen::Scan => match key.code {
                 KeyCode::Char('q') => return Ok(()),
                 KeyCode::Esc => app.screen = Screen::Welcome,
-                KeyCode::Up | KeyCode::Char('k') => move_sel(&mut app.list_state, -1, app.items.len()),
-                KeyCode::Down | KeyCode::Char('j') => move_sel(&mut app.list_state, 1, app.items.len()),
+                KeyCode::Up | KeyCode::Char('k') => app.move_row(-1),
+                KeyCode::Down | KeyCode::Char('j') => app.move_row(1),
                 KeyCode::Char(' ') => {
+                    // Only optional (AI) missing tools can be toggled; required
+                    // missing tools are locked in.
                     if app.scan_done {
-                        if let Some(i) = app.list_state.selected() {
-                            app.selected[i] = !app.selected[i];
+                        if let Some(i) = app.cursor_item() {
+                            if matches!(app.states[i], ItemState::Missing)
+                                && app.items[i].section == Section::Ai
+                            {
+                                app.selected[i] = !app.selected[i];
+                            }
                         }
                     }
                 }
@@ -345,15 +400,6 @@ fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, dry_run: bool)
             },
         }
     }
-}
-
-fn move_sel(state: &mut ListState, delta: i32, len: usize) {
-    if len == 0 {
-        return;
-    }
-    let cur = state.selected().unwrap_or(0) as i32;
-    let next = (cur + delta).rem_euclid(len as i32) as usize;
-    state.select(Some(next));
 }
 
 // ---------------------------------------------------------------------------
@@ -470,27 +516,38 @@ fn draw_scan(f: &mut Frame, app: &mut App) {
     let (body, footer) = chrome(f, app, "What you have vs. what we use");
 
     let items: Vec<ListItem> = app
-        .items
+        .rows
         .iter()
-        .enumerate()
-        .map(|(i, sw)| {
-            let (icon, style) = match &app.states[i] {
-                ItemState::Checking => ("⏳ checking…".to_string(), theme::dim()),
-                ItemState::Installed(d) => (format!("✓ {d}"), theme::good()),
-                ItemState::Missing => ("✗ missing".to_string(), theme::bad()),
-            };
-            let mark = if !app.scan_done {
-                "   "
-            } else if app.selected[i] {
-                "[x]"
-            } else {
-                "[ ]"
-            };
-            ListItem::new(Line::from(vec![
-                Span::styled(format!(" {mark} "), theme::border()),
-                Span::styled(format!("{:<22}", sw.name), Style::new().bold()),
-                Span::styled(icon, style),
-            ]))
+        .map(|row| match row {
+            Row::Header(title) => ListItem::new(Line::styled(
+                format!("─{title}{}", "─".repeat(40_usize.saturating_sub(title.len()))),
+                theme::title(),
+            )),
+            Row::Item(i) => {
+                let i = *i;
+                let sw = &app.items[i];
+                let (icon, style) = match &app.states[i] {
+                    ItemState::Checking => ("⏳ checking…".to_string(), theme::dim()),
+                    ItemState::Installed(d) => (format!("✓ {d}"), theme::good()),
+                    ItemState::Missing => ("✗ missing".to_string(), theme::bad()),
+                };
+                // Checkbox: optional missing tools toggle; required missing
+                // tools are locked; installed tools have nothing to pick.
+                let mark = if !app.scan_done || !matches!(app.states[i], ItemState::Missing) {
+                    "    ".to_string()
+                } else if sw.section == Section::Required {
+                    "[✔] ".to_string() // required — always installed
+                } else if app.selected[i] {
+                    "[x] ".to_string()
+                } else {
+                    "[ ] ".to_string()
+                };
+                ListItem::new(Line::from(vec![
+                    Span::styled(format!(" {mark}"), theme::border()),
+                    Span::styled(format!("{:<20}", sw.name), Style::new().bold()),
+                    Span::styled(icon, style),
+                ]))
+            }
         })
         .collect();
 
@@ -510,8 +567,7 @@ fn draw_scan(f: &mut Frame, app: &mut App) {
 
     // Description of the highlighted item.
     let desc = app
-        .list_state
-        .selected()
+        .cursor_item()
         .and_then(|i| app.items.get(i))
         .map(|sw| sw.description)
         .unwrap_or("");
@@ -527,7 +583,7 @@ fn draw_scan(f: &mut Frame, app: &mut App) {
 
     if app.scan_done {
         let n = app.selected.iter().filter(|s| **s).count();
-        hint(f, footer, &format!("space toggle · enter install {n} selected · r rescan · esc back · q quit"));
+        hint(f, footer, &format!("space toggle AI tools · enter install {n} selected (required auto-included) · r rescan · esc back · q quit"));
     } else {
         hint(f, footer, "scanning your system…");
     }
