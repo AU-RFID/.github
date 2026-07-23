@@ -21,6 +21,20 @@ All tools live in **`software.json`** — no Rust needed. Each entry has a
 Force a Linux mode for testing with `RFID_ONBOARD_LINUX=desktop|server`.
 `cargo test` verifies parsing + that GUI apps never leak onto a server.
 
+## Aligned with the EAGLE projects (`~/Developer/EAGLE`)
+
+The registry mirrors what the lab's real repos use:
+- **Bun** is the only JS package manager (bun@1.3.x) — pnpm/npm/fnm dropped.
+- **Go** (1.25–1.26), **Rust**, **Vault**, **MySQL** (MySQL Workbench).
+- **Kubernetes**: k3s cluster driven by kubectl + Kustomize (added), viewed
+  with k9s / Lens. ArgoCD is the GitOps layer (CLI not added yet).
+- **Xcode + CLT** (macOS only) for the `eagle-rfid-app` iOS app / TestFlight.
+- AI editors Cursor + OpenCode are both configured in `eagle-platform`.
+
+Not yet reflected (candidates): ArgoCD CLI, a MySQL client (mysql/mycli),
+Meilisearch/SpiceDB/Keycloak are cluster-side only. Lint/format is Biome
+(project dep, no system tool).
+
 ## Needs verification on real hosts
 
 - winget IDs / casks flagged as best-effort: **Yaak**, **Tower**, Lens,

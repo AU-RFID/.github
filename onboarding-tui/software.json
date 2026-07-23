@@ -84,6 +84,18 @@
       }
     },
     {
+      "name": "Xcode",
+      "_note": "macOS only — for the eagle-rfid-app iOS app / TestFlight. Installed via mas (must be signed into the App Store).",
+      "description": "Xcode — Apple IDE for the iOS RFID app (macOS only, large download)",
+      "section": "editors",
+      "kind": "gui",
+      "follow_up": [ "If Xcode didn't install, get it from the App Store (mas needs you signed in)" ],
+      "macos": {
+        "check": "test -d '/Applications/Xcode.app' && echo installed",
+        "install": [ { "cmd": "test -d '/Applications/Xcode.app' || { command -v mas >/dev/null 2>&1 || brew install mas; mas install 497799835; }" } ]
+      }
+    },
+    {
       "name": "Neovim",
       "description": "nvim — modal terminal editor",
       "section": "editors",
@@ -140,6 +152,24 @@
         "check": "test -d '/Applications/Lens.app' && echo installed",
         "install": [ { "cmd": "test -d '/Applications/Lens.app' || brew install --cask lens" } ]
       }
+    },
+    {
+      "name": "kubectl",
+      "description": "kubectl — the Kubernetes CLI (the lab runs a k3s cluster)",
+      "section": "containers",
+      "kind": "cli",
+      "check": "kubectl version --client 2>/dev/null | head -1",
+      "macos": { "install": [ { "cmd": "command -v kubectl >/dev/null 2>&1 || brew install kubectl" } ] },
+      "linux": { "install": [ { "cmd": "command -v kubectl >/dev/null 2>&1 || { A=$(dpkg --print-architecture 2>/dev/null || echo amd64); curl -fsSL -o /tmp/kubectl https://dl.k8s.io/release/$(curl -fsSL https://dl.k8s.io/release/stable.txt)/bin/linux/$A/kubectl && sudo install /tmp/kubectl /usr/local/bin/kubectl; }" } ] }
+    },
+    {
+      "name": "Kustomize",
+      "description": "kustomize — templating for the cluster-infra k8s manifests",
+      "section": "containers",
+      "kind": "cli",
+      "check": "export PATH=$HOME/.local/bin:$PATH; kustomize version 2>/dev/null | head -1",
+      "macos": { "install": [ { "cmd": "command -v kustomize >/dev/null 2>&1 || brew install kustomize" } ] },
+      "linux": { "install": [ { "cmd": "export PATH=$HOME/.local/bin:$PATH; command -v kustomize >/dev/null 2>&1 || { mkdir -p $HOME/.local/bin && curl -fsSL https://raw.githubusercontent.com/kubernetes-sigs/kustomize/master/hack/install_kustomize.sh -o /tmp/kustomize-install.sh && bash /tmp/kustomize-install.sh $HOME/.local/bin; }" } ] }
     },
 
     {
@@ -272,6 +302,15 @@
     },
 
     {
+      "name": "Xcode Command Line Tools",
+      "_note": "macOS only — provides git, clang, make etc. `xcode-select --install` opens a GUI dialog to confirm.",
+      "description": "Apple command line tools — compilers/git that native builds need (macOS)",
+      "section": "required",
+      "kind": "cli",
+      "check": "xcode-select -p >/dev/null 2>&1 && echo installed",
+      "macos": { "install": [ { "cmd": "xcode-select -p >/dev/null 2>&1 || xcode-select --install" } ] }
+    },
+    {
       "name": "Homebrew",
       "description": "macOS package manager — everything else installs through it",
       "section": "required",
@@ -375,19 +414,12 @@
     },
     {
       "name": "Bun",
-      "description": "bun — fast JS runtime/bundler used by some lab projects",
+      "_note": "EAGLE's sole JS package manager + runtime (bun@1.3.x). pnpm/npm are not used.",
+      "description": "bun — JS runtime + package manager used across the EAGLE monorepo",
       "section": "required",
       "kind": "cli",
       "check": "export PATH=$HOME/.bun/bin:$PATH; bun --version",
       "any": { "install": [ { "cmd": "export PATH=$HOME/.bun/bin:$PATH; command -v bun >/dev/null 2>&1 || { curl -fsSL https://bun.sh/install -o /tmp/bun-install.sh && bash /tmp/bun-install.sh; }" } ] }
-    },
-    {
-      "name": "pnpm",
-      "description": "pnpm package manager (via corepack — needs Node.js)",
-      "section": "required",
-      "kind": "cli",
-      "check": "export PATH=$HOME/.local/share/fnm:$PATH; eval \"$(fnm env 2>/dev/null)\"; pnpm --version",
-      "any": { "install": [ { "cmd": "export PATH=$HOME/.local/share/fnm:$PATH; eval \"$(fnm env)\"; corepack enable pnpm" } ] }
     }
   ]
 }
