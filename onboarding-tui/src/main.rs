@@ -26,7 +26,7 @@ use ratatui::prelude::*;
 use ratatui::widgets::{Block, Borders, List, ListItem, ListState, Paragraph, Wrap};
 
 use detect::{detect, Platform};
-use software::{registry, Location, Section, Software};
+use software::{load, Location, Rule, SectionDef, Software};
 
 /// Where a command runs: the local shell, inside a WSL distro (from a
 /// Windows host), or on the Windows host itself (winget).
@@ -103,9 +103,11 @@ struct App {
     dry_run: bool,
     platform: Platform,
     items: Vec<Software>,
-    /// One box per non-empty section, in `Section::ALL` order — the scan
-    /// screen's layout. Each holds the item indices shown in that box.
-    boxes: Vec<(Section, Vec<usize>)>,
+    /// Section definitions (titles + rules), in display order.
+    sections: Vec<SectionDef>,
+    /// One box per non-empty section (by section index). Each holds the item
+    /// indices shown in that box.
+    boxes: Vec<(usize, Vec<usize>)>,
     /// Cursor position over the combined display order across all boxes.
     cursor: usize,
     /// One-shot warning shown in the footer (e.g. "pick an editor").
@@ -128,15 +130,13 @@ struct App {
 impl App {
     fn new(dry_run: bool) -> Self {
         let platform = detect();
-        let items = registry(&platform);
+        let (sections, items) = load(&platform);
         let n = items.len();
 
-        // Split the registry into boxes; software.rs (Section::ALL + each
-        // item's section) stays the single source of truth. Empty sections
-        // are dropped so no blank boxes render.
-        let boxes: Vec<(Section, Vec<usize>)> = Section::ALL
-            .iter()
-            .filter_map(|&s| {
+        // One box per non-empty section (software.json is the source of truth
+        // for section order and membership); empty sections render nothing.
+        let boxes: Vec<(usize, Vec<usize>)> = (0..sections.len())
+            .filter_map(|s| {
                 let order: Vec<usize> = (0..n).filter(|&i| items[i].section == s).collect();
                 (!order.is_empty()).then_some((s, order))
             })
@@ -146,6 +146,7 @@ impl App {
             dry_run,
             platform,
             items,
+            sections,
             boxes,
             cursor: 0,
             notice: None,
@@ -233,10 +234,10 @@ impl App {
                 }
                 Msg::ScanDone => {
                     self.scan_done = true;
-                    // Required + missing → locked in. Optional (AI) starts unticked.
-                    for (i, st) in self.states.iter().enumerate() {
-                        self.selected[i] = matches!(st, ItemState::Missing)
-                            && self.items[i].section == Section::Required;
+                    // Required + missing → locked in. Optional/pick-one start unticked.
+                    for i in 0..self.items.len() {
+                        self.selected[i] = matches!(self.states[i], ItemState::Missing)
+                            && self.rule_of(i) == Rule::Required;
                     }
                     self.rx = None;
                     return;
@@ -319,12 +320,27 @@ impl App {
         }
     }
 
-    /// At least one editor must end up on the machine: already installed or selected.
-    fn editor_picked(&self) -> bool {
-        self.items.iter().enumerate().any(|(i, sw)| {
-            sw.section == Section::Editors
-                && (matches!(self.states[i], ItemState::Installed(_)) || self.selected[i])
-        })
+    /// The rule governing item `i`'s section.
+    fn rule_of(&self, i: usize) -> Rule {
+        self.sections[self.items[i].section].rule
+    }
+
+    /// The first `pick-one` section with nothing installed or selected, if any.
+    /// Returns its title for the footer warning.
+    fn unsatisfied_pick_one(&self) -> Option<&str> {
+        for (si, sec) in self.sections.iter().enumerate() {
+            if sec.rule != Rule::PickOne {
+                continue;
+            }
+            let satisfied = self.items.iter().enumerate().any(|(i, sw)| {
+                sw.section == si
+                    && (matches!(self.states[i], ItemState::Installed(_)) || self.selected[i])
+            });
+            if !satisfied {
+                return Some(sec.title.trim());
+            }
+        }
+        None
     }
 }
 
@@ -484,13 +500,13 @@ fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, dry_run: bool)
                 KeyCode::Up | KeyCode::Char('k') => app.move_row(-1),
                 KeyCode::Down | KeyCode::Char('j') => app.move_row(1),
                 KeyCode::Char(' ') => {
-                    // Missing editors and AI tools can be toggled; required
+                    // Missing optional/pick-one tools can be toggled; required
                     // missing tools are locked in.
                     if app.scan_done {
                         app.notice = None;
                         if let Some(i) = app.cursor_item() {
                             if matches!(app.states[i], ItemState::Missing)
-                                && app.items[i].section != Section::Required
+                                && app.rule_of(i) != Rule::Required
                             {
                                 app.selected[i] = !app.selected[i];
                             }
@@ -504,11 +520,11 @@ fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, dry_run: bool)
                     }
                 }
                 KeyCode::Enter if app.scan_done => {
-                    if app.editor_picked() {
-                        app.start_install();
-                    } else {
-                        app.notice =
-                            Some("Pick at least one code editor (space to select)".into());
+                    match app.unsatisfied_pick_one() {
+                        None => app.start_install(),
+                        Some(title) => {
+                            app.notice = Some(format!("Pick at least one from:{title}"));
+                        }
                     }
                 }
                 _ => {}
@@ -687,7 +703,7 @@ fn scan_line<'a>(app: &'a App, i: usize) -> Line<'a> {
     // tools are locked in; installed tools have nothing to pick.
     let mark = if !app.scan_done || !matches!(app.states[i], ItemState::Missing) {
         "    "
-    } else if sw.section == Section::Required || app.selected[i] {
+    } else if app.rule_of(i) == Rule::Required || app.selected[i] {
         "[X] " // required-missing is locked in; optional shows its toggle state
     } else {
         "[ ] "
@@ -770,16 +786,16 @@ fn draw_scan(f: &mut Frame, app: &mut App) {
     let areas = Layout::vertical(constraints).split(boxes_area);
 
     for (slot, j) in (start..=end).enumerate() {
-        let (section, order) = &app.boxes[j];
+        let (section_idx, order) = &app.boxes[j];
         let local = (j == cur_box).then_some(cur_local);
-        scan_box(f, app, areas[slot], section.title(), order, local);
+        scan_box(f, app, areas[slot], &app.sections[*section_idx].title, order, local);
     }
 
     // Description of the highlighted item.
     let desc = app
         .cursor_item()
         .and_then(|i| app.items.get(i))
-        .map(|sw| sw.description)
+        .map(|sw| sw.description.as_str())
         .unwrap_or("");
     f.render_widget(
         Paragraph::new(desc).style(theme::dim()).wrap(Wrap { trim: true }).block(

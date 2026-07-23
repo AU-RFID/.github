@@ -1,715 +1,263 @@
-//! The software registry — THE one place to add or remove tools.
+//! Loads and resolves the software registry from `software.json`.
 //!
-//! Each entry is a [`Software`] with:
-//!   - `section`: which box it appears in — `Editors` (pick at least one),
-//!     `Ai` (optional multi-select), or `Required` (locked in when missing)
-//!   - `preferred`: shows a ★ preferred tag in the UI
-//!   - `location`: where it lives — `Dev` tools go in the dev environment
-//!     (local shell on macOS/Linux, INSIDE the chosen WSL distro when the TUI
-//!     runs on a Windows host); `Host` apps are GUI programs that must land on
-//!     the host system (installed via winget on Windows, brew casks on macOS)
-//!   - `winget_id`: the winget package id used when installing a `Host` app
-//!     from a Windows host
-//!   - `check`: a read-only command that succeeds (exit 0) and prints a
-//!     version/detail line iff the tool is already installed
-//!   - `install`: idempotent, NON-interactive steps (per platform)
-//!   - `follow_up`: commands the user must run themselves afterwards
+//! The data lives in `software.json` (compiled in via `include_str!`, so the
+//! binary stays self-contained). This module parses it and resolves each entry
+//! against the detected [`Env`] into the runtime [`Software`] the UI consumes:
 //!
-//! To add a tool: append one `Software` to the Vec in [`registry`] — set only
-//! the fields you need and end with `..Software::default()`. To remove one:
-//! delete its block. The UI, scanner, and installer all iterate this list.
-//! Items install in registry order, so put dependencies (Node before pnpm)
-//! first. A GUI app that must live on the Windows host (e.g. Yaak) is just
-//! `location: Location::Host` plus its `winget_id`.
+//!   - `cli` tools install everywhere (and inside WSL from a Windows host)
+//!   - `gui` apps install on macOS / Linux-desktop / Windows-host, and are
+//!     skipped on Linux servers
+//!   - a tool is dropped when no applicable command block exists for the target
+//!
+//! To change what gets installed, edit `software.json` — not this file.
 
-use crate::detect::{Platform, PkgManager};
+use serde::Deserialize;
+
+use crate::detect::{Env, Platform};
+
+// ---------------------------------------------------------------------------
+// Runtime model (what the UI uses)
+// ---------------------------------------------------------------------------
 
 #[derive(Clone, Copy, PartialEq, Eq)]
-pub enum Section {
-    Editors,
-    Containers,
-    Api,
-    Database,
-    GitTools,
-    Ai,
+pub enum Rule {
+    PickOne,
+    Optional,
     Required,
 }
 
-impl Section {
-    pub fn title(&self) -> &'static str {
-        match self {
-            Section::Editors => " Code Editors — pick at least one ",
-            Section::Containers => " Docker / Kubernetes — optional ",
-            Section::Api => " API / HTTP Clients — optional ",
-            Section::Database => " Database Tools — optional ",
-            Section::GitTools => " Git Tools — optional ",
-            Section::Ai => " AI Tools — optional ",
-            Section::Required => " Required ",
-        }
-    }
-
-    /// Every section, in the order the scan screen shows them.
-    pub const ALL: [Section; 7] = [
-        Section::Editors,
-        Section::Containers,
-        Section::Api,
-        Section::Database,
-        Section::GitTools,
-        Section::Ai,
-        Section::Required,
-    ];
+pub struct SectionDef {
+    pub title: String,
+    pub rule: Rule,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Location {
-    /// Dev-environment tool: local shell, or inside the WSL distro on Windows.
+    /// Dev tool: local shell, or inside the WSL distro from a Windows host.
     Dev,
-    /// Host GUI app: winget on a Windows host, cask on macOS.
+    /// GUI app: on the host (winget on Windows, cask/desktop install elsewhere).
     Host,
 }
 
 pub struct Step {
-    pub title: &'static str,
+    pub title: String,
     pub cmd: String,
 }
 
 pub struct Software {
-    pub name: &'static str,
-    pub description: &'static str,
-    pub section: Section,
+    pub name: String,
+    pub description: String,
+    pub section: usize, // index into the sections vec
     pub preferred: bool,
     pub location: Location,
-    pub winget_id: Option<&'static str>,
     pub check: String,
     pub install: Vec<Step>,
-    pub follow_up: Vec<&'static str>,
+    pub follow_up: Vec<String>,
 }
 
-impl Default for Software {
-    fn default() -> Self {
-        Software {
-            name: "",
-            description: "",
-            section: Section::Required,
-            preferred: false,
-            location: Location::Dev,
-            winget_id: None,
-            check: String::new(),
-            install: Vec::new(),
-            follow_up: Vec::new(),
+// ---------------------------------------------------------------------------
+// JSON shapes (serde ignores unknown keys, e.g. the "_help" block)
+// ---------------------------------------------------------------------------
+
+#[derive(Deserialize)]
+struct RawSection {
+    id: String,
+    title: String,
+    rule: String,
+}
+
+#[derive(Deserialize)]
+struct RawStep {
+    title: Option<String>,
+    cmd: String,
+}
+
+#[derive(Deserialize)]
+struct RawBlock {
+    check: Option<String>,
+    install: Vec<RawStep>,
+}
+
+#[derive(Deserialize)]
+struct RawSoftware {
+    name: String,
+    description: String,
+    section: String,
+    kind: String, // "gui" | "cli"
+    #[serde(default)]
+    preferred: bool,
+    #[serde(default)]
+    check: Option<String>,
+    #[serde(default)]
+    follow_up: Vec<String>,
+    #[serde(default)]
+    winget_id: Option<String>,
+    #[serde(default)]
+    macos: Option<RawBlock>,
+    #[serde(default)]
+    linux: Option<RawBlock>,
+    #[serde(default)]
+    any: Option<RawBlock>,
+}
+
+#[derive(Deserialize)]
+struct RawData {
+    sections: Vec<RawSection>,
+    software: Vec<RawSoftware>,
+}
+
+fn parse_rule(s: &str) -> Rule {
+    match s {
+        "pick-one" => Rule::PickOne,
+        "required" => Rule::Required,
+        _ => Rule::Optional,
+    }
+}
+
+/// Parse `software.json` and resolve it for this platform. Returns the section
+/// definitions (in display order) and the applicable software list.
+pub fn load(platform: &Platform) -> (Vec<SectionDef>, Vec<Software>) {
+    let data: RawData = serde_json::from_str(include_str!("../software.json"))
+        .expect("software.json is malformed — check the JSON syntax");
+
+    let sections: Vec<SectionDef> = data
+        .sections
+        .iter()
+        .map(|s| SectionDef { title: s.title.clone(), rule: parse_rule(&s.rule) })
+        .collect();
+    let section_index = |id: &str| data.sections.iter().position(|s| s.id == id);
+
+    let mut items = Vec::new();
+    for raw in &data.software {
+        let Some(section) = section_index(&raw.section) else {
+            continue; // unknown section id — skip rather than crash
+        };
+        let gui = raw.kind == "gui";
+        if let Some(sw) = resolve(raw, section, gui, platform) {
+            items.push(sw);
         }
     }
+    (sections, items)
 }
 
-/// `command -v <probe> || <brew|apt install>` for simple package-manager tools.
-fn pkg_install(p: &Platform, brew: &str, apt: &str, probe: &str) -> String {
-    match p.pkg {
-        PkgManager::Brew => {
-            format!("command -v {probe} >/dev/null 2>&1 || brew install {brew}")
-        }
-        PkgManager::Apt => format!(
-            "command -v {probe} >/dev/null 2>&1 || {{ sudo apt-get update -y && sudo apt-get install -y {apt}; }}"
-        ),
-    }
-}
+/// Turn a JSON entry into a runtime [`Software`] for this env, or `None` if it
+/// doesn't apply here (e.g. a GUI app on a Linux server, or a tool with no
+/// command block for this OS).
+fn resolve(raw: &RawSoftware, section: usize, gui: bool, platform: &Platform) -> Option<Software> {
+    let location = if gui { Location::Host } else { Location::Dev };
 
-/// Download an official install script to /tmp and run it (if `probe` is missing).
-fn script_install(probe: &str, url: &str) -> String {
-    format!(
-        "command -v {probe} >/dev/null 2>&1 || {{ curl -fsSL {url} -o /tmp/{probe}-install.sh && bash /tmp/{probe}-install.sh; }}"
-    )
-}
-
-/// Linux arch string used by most GitHub release assets.
-fn linux_arch(p: &Platform) -> &'static str {
-    match p.arch {
-        "aarch64" => "arm64",
-        _ => "amd64",
-    }
-}
-
-/// Install a single static binary from a GitHub `latest/download` tarball that
-/// contains a file named `probe` (if `probe` is missing).
-fn github_bin_install(probe: &str, repo: &str, asset: &str) -> String {
-    format!(
-        "command -v {probe} >/dev/null 2>&1 || {{ curl -fsSL https://github.com/{repo}/releases/latest/download/{asset} -o /tmp/{probe}.tgz && tar -xzf /tmp/{probe}.tgz -C /tmp {probe} && sudo install /tmp/{probe} /usr/local/bin/{probe}; }}"
-    )
-}
-
-/// Like [`github_bin_install`], but resolves the asset URL via the GitHub API
-/// (for projects whose asset names include the version, e.g. lazygit).
-fn github_api_bin_install(probe: &str, repo: &str, pattern: &str) -> String {
-    format!(
-        r#"command -v {probe} >/dev/null 2>&1 || {{ url=$(curl -fsSL https://api.github.com/repos/{repo}/releases/latest | grep browser_download_url | grep -i '{pattern}' | head -1 | cut -d'"' -f4) && curl -fsSL "$url" -o /tmp/{probe}.tgz && tar -xzf /tmp/{probe}.tgz -C /tmp {probe} && sudo install /tmp/{probe} /usr/local/bin/{probe}; }}"#
-    )
-}
-
-// One push-block per tool keeps add/remove a single-block edit, and some
-// blocks are platform-conditional — clearer than one big vec![] literal.
-#[allow(clippy::vec_init_then_push)]
-pub fn registry(p: &Platform) -> Vec<Software> {
-    let mut list = Vec::new();
-    let windows_host = p.windows_host();
-
-    // =======================================================================
-    // Code editors (multi-select, at least one required)
-    // =======================================================================
-
-    list.push(Software {
-        name: "VS Code",
-        description: "Visual Studio Code — the most common choice, big extension ecosystem",
-        section: Section::Editors,
-        location: Location::Host,
-        winget_id: Some("Microsoft.VisualStudioCode"),
-        check: match p.pkg {
-            PkgManager::Brew => r#"test -d "/Applications/Visual Studio Code.app" && echo "VS Code installed" || code --version | head -1"#.into(),
-            PkgManager::Apt => "code --version | head -1".into(),
-        },
-        install: vec![Step {
-            title: "Install VS Code",
-            cmd: match p.pkg {
-                PkgManager::Brew => r#"test -d "/Applications/Visual Studio Code.app" || brew install --cask visual-studio-code"#.into(),
-                PkgManager::Apt => r#"command -v code >/dev/null 2>&1 || { curl -fsSL https://packages.microsoft.com/keys/microsoft.asc | sudo gpg --dearmor -o /usr/share/keyrings/ms-vscode-keyring.gpg && echo "deb [signed-by=/usr/share/keyrings/ms-vscode-keyring.gpg] https://packages.microsoft.com/repos/code stable main" | sudo tee /etc/apt/sources.list.d/vscode.list && sudo apt-get update -y && sudo apt-get install -y code; }"#.into(),
-            },
-        }],
-        ..Software::default()
-    });
-
-    list.push(Software {
-        name: "VSCodium",
-        description: "VS Code without Microsoft telemetry/branding",
-        section: Section::Editors,
-        location: Location::Host,
-        winget_id: Some("VSCodium.VSCodium"),
-        check: match p.pkg {
-            PkgManager::Brew => r#"test -d "/Applications/VSCodium.app" && echo "VSCodium installed" || codium --version | head -1"#.into(),
-            PkgManager::Apt => "codium --version | head -1".into(),
-        },
-        install: vec![Step {
-            title: "Install VSCodium",
-            cmd: match p.pkg {
-                PkgManager::Brew => r#"test -d "/Applications/VSCodium.app" || brew install --cask vscodium"#.into(),
-                PkgManager::Apt => r#"command -v codium >/dev/null 2>&1 || { curl -fsSL https://gitlab.com/paulcarroty/vscodium-deb-rpm-repo/raw/master/pub.gpg | sudo gpg --dearmor -o /usr/share/keyrings/vscodium-archive-keyring.gpg && echo "deb [signed-by=/usr/share/keyrings/vscodium-archive-keyring.gpg] https://download.vscodium.com/debs vscodium main" | sudo tee /etc/apt/sources.list.d/vscodium.list && sudo apt-get update -y && sudo apt-get install -y codium; }"#.into(),
-            },
-        }],
-        ..Software::default()
-    });
-
-    // Desktop app: macOS cask or Windows-host winget (no Linux build offered).
-    if p.pkg == PkgManager::Brew || windows_host {
-        list.push(Software {
-            name: "Cursor",
-            description: "Cursor — AI-first VS Code fork (editor app; CLI is under AI Tools)",
-            section: Section::Editors,
-            preferred: true,
-            location: Location::Host,
-            winget_id: Some("Anysphere.Cursor"),
-            check: r#"test -d "/Applications/Cursor.app" && echo "Cursor installed""#.into(),
-            install: vec![Step {
-                title: "Install Cursor",
-                cmd: r#"test -d "/Applications/Cursor.app" || brew install --cask cursor"#.into(),
-            }],
-            ..Software::default()
-        });
-    }
-
-    list.push(Software {
-        name: "Neovim",
-        description: "nvim — modal terminal editor",
-        section: Section::Editors,
-        check: "nvim --version | head -1".into(),
-        install: vec![Step {
-            title: "Install Neovim",
-            cmd: pkg_install(p, "neovim", "neovim", "nvim"),
-        }],
-        ..Software::default()
-    });
-
-    list.push(Software {
-        name: "Helix",
-        description: "hx — modern modal terminal editor, batteries included",
-        section: Section::Editors,
-        check: "hx --version | head -1".into(),
-        install: vec![Step {
-            title: "Install Helix",
-            cmd: match p.pkg {
-                PkgManager::Brew => "command -v hx >/dev/null 2>&1 || brew install helix".into(),
-                PkgManager::Apt => r#"command -v hx >/dev/null 2>&1 || { sudo apt-get install -y software-properties-common && sudo add-apt-repository -y ppa:maveonair/helix-editor && sudo apt-get update -y && sudo apt-get install -y helix; }"#.into(),
-            },
-        }],
-        ..Software::default()
-    });
-
-    list.push(Software {
-        name: "Zed",
-        description: "Zed — fast collaborative editor by the Atom team",
-        section: Section::Editors,
-        preferred: true,
-        location: Location::Host,
-        winget_id: Some("ZedIndustries.Zed"),
-        check: match p.pkg {
-            PkgManager::Brew => r#"test -d "/Applications/Zed.app" && echo "Zed installed" || zed --version | head -1"#.into(),
-            PkgManager::Apt => r#"export PATH="$HOME/.local/bin:$PATH"; zed --version | head -1"#.into(),
-        },
-        install: vec![Step {
-            title: "Install Zed",
-            cmd: match p.pkg {
-                PkgManager::Brew => r#"test -d "/Applications/Zed.app" || brew install --cask zed"#.into(),
-                PkgManager::Apt => script_install("zed", "https://zed.dev/install.sh"),
-            },
-        }],
-        ..Software::default()
-    });
-
-    // =======================================================================
-    // Docker / Kubernetes (optional, multi-select — GUIs and TUIs)
-    //
-    // OrbStack (which bundles the Docker daemon) is required on macOS and
-    // lives in the Required section below.
-    // =======================================================================
-
-    // k9s — Kubernetes TUI (cross-platform).
-    list.push(Software {
-        name: "k9s",
-        description: "k9s — terminal UI for Kubernetes clusters",
-        section: Section::Containers,
-        preferred: true,
-        check: "k9s version 2>/dev/null | head -1".into(),
-        install: vec![Step {
-            title: "Install k9s",
-            cmd: match p.pkg {
-                PkgManager::Brew => "command -v k9s >/dev/null 2>&1 || brew install k9s".into(),
-                PkgManager::Apt => {
-                    github_bin_install("k9s", "derailed/k9s", &format!("k9s_Linux_{}.tar.gz", linux_arch(p)))
-                }
-            },
-        }],
-        ..Software::default()
-    });
-
-    // d4s — Docker TUI (github.com/jr-k/d4s).
-    list.push(Software {
-        name: "d4s",
-        description: "d4s — feature-rich terminal UI for Docker",
-        section: Section::Containers,
-        preferred: true,
-        check: r#"export PATH="$HOME/.local/bin:$PATH"; d4s --version | head -1"#.into(),
-        install: vec![Step {
-            title: "Install d4s",
-            cmd: match p.pkg {
-                PkgManager::Brew => "command -v d4s >/dev/null 2>&1 || brew install jr-k/d4s/d4s".into(),
-                // Official installer drops the binary into ~/.local/bin.
-                PkgManager::Apt => r#"export PATH="$HOME/.local/bin:$PATH"; command -v d4s >/dev/null 2>&1 || { curl -fsSL https://d4scli.io/install.sh -o /tmp/d4s-install.sh && sh /tmp/d4s-install.sh "$HOME/.local/bin"; }"#.into(),
-            },
-        }],
-        ..Software::default()
-    });
-
-    // lazydocker — Docker TUI (cross-platform).
-    list.push(Software {
-        name: "lazydocker",
-        description: "lazydocker — terminal UI for Docker and docker-compose",
-        section: Section::Containers,
-        check: r#"export PATH="$HOME/.local/bin:$PATH"; lazydocker --version | head -1"#.into(),
-        install: vec![Step {
-            title: "Install lazydocker",
-            cmd: match p.pkg {
-                PkgManager::Brew => "command -v lazydocker >/dev/null 2>&1 || brew install lazydocker".into(),
-                PkgManager::Apt => script_install(
-                    "lazydocker",
-                    "https://raw.githubusercontent.com/jesseduffield/lazydocker/master/scripts/install_update_linux.sh",
-                ),
-            },
-        }],
-        ..Software::default()
-    });
-
-    // Lens — Kubernetes GUI (macOS + Windows host; GUI app).
-    if p.pkg == PkgManager::Brew || windows_host {
-        list.push(Software {
-            name: "Lens",
-            description: "Lens Desktop — GUI for managing Kubernetes clusters",
-            section: Section::Containers,
-            location: Location::Host,
-            winget_id: Some("Mirantis.Lens"),
-            check: r#"test -d "/Applications/Lens.app" && echo "Lens installed""#.into(),
-            install: vec![Step {
-                title: "Install Lens",
-                cmd: r#"test -d "/Applications/Lens.app" || brew install --cask lens"#.into(),
-            }],
-            ..Software::default()
-        });
-    }
-
-    // =======================================================================
-    // API / HTTP clients (optional, multi-select — GUI apps)
-    // =======================================================================
-    if p.pkg == PkgManager::Brew || windows_host {
-        list.push(Software {
-            name: "Yaak",
-            description: "Yaak — modern desktop API client (REST/GraphQL/gRPC)",
-            section: Section::Api,
-            location: Location::Host,
-            winget_id: Some("Yaak.Yaak"),
-            check: r#"test -d "/Applications/Yaak.app" && echo "Yaak installed""#.into(),
-            install: vec![Step {
-                title: "Install Yaak",
-                cmd: r#"test -d "/Applications/Yaak.app" || brew install --cask yaak"#.into(),
-            }],
-            ..Software::default()
-        });
-
-        list.push(Software {
-            name: "Bruno",
-            description: "Bruno — open-source, git-friendly API client",
-            section: Section::Api,
-            location: Location::Host,
-            winget_id: Some("Bruno.Bruno"),
-            check: r#"test -d "/Applications/Bruno.app" && echo "Bruno installed""#.into(),
-            install: vec![Step {
-                title: "Install Bruno",
-                cmd: r#"test -d "/Applications/Bruno.app" || brew install --cask bruno"#.into(),
-            }],
-            ..Software::default()
-        });
-    }
-
-    // =======================================================================
-    // Database tools (optional, multi-select — GUI apps)
-    // =======================================================================
-    if p.pkg == PkgManager::Brew || windows_host {
-        list.push(Software {
-            name: "MySQL Workbench",
-            description: "MySQL Workbench — official MySQL GUI",
-            section: Section::Database,
-            location: Location::Host,
-            winget_id: Some("Oracle.MySQLWorkbench"),
-            check: r#"test -d "/Applications/MySQLWorkbench.app" && echo "MySQL Workbench installed""#.into(),
-            install: vec![Step {
-                title: "Install MySQL Workbench",
-                cmd: r#"test -d "/Applications/MySQLWorkbench.app" || brew install --cask mysqlworkbench"#.into(),
-            }],
-            ..Software::default()
-        });
-
-        list.push(Software {
-            name: "DBeaver",
-            description: "DBeaver Community — free cross-database GUI",
-            section: Section::Database,
-            location: Location::Host,
-            winget_id: Some("dbeaver.dbeaver"),
-            check: r#"test -d "/Applications/DBeaver.app" && echo "DBeaver installed""#.into(),
-            install: vec![Step {
-                title: "Install DBeaver",
-                cmd: r#"test -d "/Applications/DBeaver.app" || brew install --cask dbeaver-community"#.into(),
-            }],
-            ..Software::default()
-        });
-
-        list.push(Software {
-            name: "DataGrip",
-            description: "DataGrip — JetBrains database IDE (free for students)",
-            section: Section::Database,
-            location: Location::Host,
-            winget_id: Some("JetBrains.DataGrip"),
-            check: r#"test -d "/Applications/DataGrip.app" && echo "DataGrip installed""#.into(),
-            install: vec![Step {
-                title: "Install DataGrip",
-                cmd: r#"test -d "/Applications/DataGrip.app" || brew install --cask datagrip"#.into(),
-            }],
-            ..Software::default()
-        });
-    }
-
-    // =======================================================================
-    // Git tools (optional, multi-select)
-    // =======================================================================
-
-    // lazygit — Git TUI (cross-platform).
-    list.push(Software {
-        name: "lazygit",
-        description: "lazygit — terminal UI for git",
-        section: Section::GitTools,
-        check: "lazygit --version | head -1".into(),
-        install: vec![Step {
-            title: "Install lazygit",
-            cmd: match p.pkg {
-                PkgManager::Brew => "command -v lazygit >/dev/null 2>&1 || brew install lazygit".into(),
-                PkgManager::Apt => github_api_bin_install(
-                    "lazygit",
-                    "jesseduffield/lazygit",
-                    &format!("Linux_{}", if p.arch == "aarch64" { "arm64" } else { "x86_64" }),
-                ),
-            },
-        }],
-        ..Software::default()
-    });
-
-    // Tower and GitHub Desktop — GUI apps (macOS + Windows host).
-    if p.pkg == PkgManager::Brew || windows_host {
-        list.push(Software {
-            name: "Tower",
-            description: "Tower — polished git GUI client",
-            section: Section::GitTools,
-            location: Location::Host,
-            winget_id: Some("fournova.Tower"),
-            check: r#"test -d "/Applications/Tower.app" && echo "Tower installed""#.into(),
-            install: vec![Step {
-                title: "Install Tower",
-                cmd: r#"test -d "/Applications/Tower.app" || brew install --cask tower"#.into(),
-            }],
-            ..Software::default()
-        });
-
-        list.push(Software {
-            name: "GitHub Desktop",
-            description: "GitHub Desktop — beginner-friendly git GUI",
-            section: Section::GitTools,
-            location: Location::Host,
-            winget_id: Some("GitHub.GitHubDesktop"),
-            check: r#"test -d "/Applications/GitHub Desktop.app" && echo "GitHub Desktop installed""#.into(),
-            install: vec![Step {
-                title: "Install GitHub Desktop",
-                cmd: r#"test -d "/Applications/GitHub Desktop.app" || brew install --cask github"#.into(),
-            }],
-            ..Software::default()
-        });
-    }
-
-    // =======================================================================
-    // AI tools (optional, multi-select)
-    // =======================================================================
-
-    list.push(Software {
-        name: "Cursor CLI",
-        description: "cursor-agent — Cursor's terminal coding agent",
-        section: Section::Ai,
-        check: r#"export PATH="$HOME/.local/bin:$PATH"; cursor-agent --version"#.into(),
-        install: vec![Step {
-            title: "Install Cursor CLI",
-            cmd: script_install("cursor-agent", "https://cursor.com/install"),
-        }],
-        follow_up: vec!["cursor-agent login"],
-        ..Software::default()
-    });
-
-    list.push(Software {
-        name: "OpenCode",
-        description: "opencode — open-source terminal coding agent by SST",
-        section: Section::Ai,
-        check: r#"export PATH="$HOME/.opencode/bin:$PATH"; opencode --version"#.into(),
-        install: vec![Step {
-            title: "Install OpenCode",
-            cmd: match p.pkg {
-                PkgManager::Brew => "command -v opencode >/dev/null 2>&1 || brew install sst/tap/opencode".into(),
-                PkgManager::Apt => script_install("opencode", "https://opencode.ai/install"),
-            },
-        }],
-        follow_up: vec!["opencode auth login"],
-        ..Software::default()
-    });
-
-    list.push(Software {
-        name: "Claude Code",
-        description: "claude — Anthropic's terminal coding agent",
-        section: Section::Ai,
-        check: r#"export PATH="$HOME/.local/bin:$PATH"; claude --version"#.into(),
-        install: vec![Step {
-            title: "Install Claude Code",
-            cmd: script_install("claude", "https://claude.ai/install.sh"),
-        }],
-        follow_up: vec!["claude   # log in on first run"],
-        ..Software::default()
-    });
-
-    list.push(Software {
-        name: "Codex",
-        description: "codex — OpenAI's terminal coding agent (needs Node.js on Linux)",
-        section: Section::Ai,
-        check: r#"export PATH="$HOME/.local/share/fnm:$PATH"; eval "$(fnm env 2>/dev/null)"; codex --version"#.into(),
-        install: vec![Step {
-            title: "Install Codex",
-            cmd: match p.pkg {
-                PkgManager::Brew => "command -v codex >/dev/null 2>&1 || brew install codex".into(),
-                PkgManager::Apt => r#"export PATH="$HOME/.local/share/fnm:$PATH"; eval "$(fnm env)"; command -v codex >/dev/null 2>&1 || npm install -g @openai/codex"#.into(),
-            },
-        }],
-        follow_up: vec!["codex login"],
-        ..Software::default()
-    });
-
-    // =======================================================================
-    // Required
-    // =======================================================================
-
-    // -- Homebrew (macOS only) ----------------------------------------------
-    if p.pkg == PkgManager::Brew && !windows_host {
-        list.push(Software {
-            name: "Homebrew",
-            description: "macOS package manager — everything else installs through it",
-            check: "brew --version | head -1".into(),
-            install: vec![Step {
-                title: "Install Homebrew (non-interactive)",
-                cmd: r#"command -v brew >/dev/null 2>&1 || { curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh -o /tmp/brew-install.sh && NONINTERACTIVE=1 /bin/bash /tmp/brew-install.sh; }"#.into(),
-            }],
-            follow_up: vec![r#"eval "$(/opt/homebrew/bin/brew shellenv)"   # then reopen your terminal"#],
-            ..Software::default()
-        });
-    }
-
-    // -- OrbStack (macOS only; bundles the Docker daemon + Kubernetes) ------
-    if p.pkg == PkgManager::Brew && !windows_host {
-        list.push(Software {
-            name: "OrbStack",
-            description: "OrbStack — Docker daemon + Kubernetes for macOS (replaces Docker Desktop)",
-            preferred: true,
-            location: Location::Host,
-            check: r#"test -d "/Applications/OrbStack.app" && echo "OrbStack installed""#.into(),
-            install: vec![Step {
-                title: "Install OrbStack",
-                cmd: r#"test -d "/Applications/OrbStack.app" || brew install --cask orbstack"#.into(),
-            }],
-            follow_up: vec!["Open OrbStack once to start the Docker daemon"],
-            ..Software::default()
-        });
-    }
-
-    // -- GitHub CLI + git ---------------------------------------------------
-    list.push(Software {
-        name: "GitHub CLI + git",
-        description: "git version control and gh for GitHub auth/cloning",
-        check: r#"git --version && gh --version | head -1"#.into(),
-        install: vec![
-            Step { title: "Install git", cmd: pkg_install(p, "git", "git", "git") },
-            Step { title: "Install GitHub CLI", cmd: pkg_install(p, "gh", "gh", "gh") },
-        ],
-        follow_up: vec![
-            "git config --global user.name \"Your Name\"",
-            "git config --global user.email \"you@auburn.edu\"",
-            "gh auth login --git-protocol ssh   # interactive browser login",
-        ],
-        ..Software::default()
-    });
-
-    // -- Linear (desktop app; macOS + Windows host) --------------------------
-    if p.pkg == PkgManager::Brew || windows_host {
-        list.push(Software {
-            name: "Linear",
-            description: "Linear desktop app — lab issue tracking",
-            location: Location::Host,
-            winget_id: Some("Linear.Linear"),
-            check: r#"test -d "/Applications/Linear.app" && echo "Linear.app installed""#.into(),
-            install: vec![Step {
-                title: "Install Linear",
-                cmd: r#"test -d "/Applications/Linear.app" || brew install --cask linear-linear"#.into(),
-            }],
-            ..Software::default()
-        });
-    }
-
-    // -- Vault --------------------------------------------------------------
-    list.push(Software {
-        name: "Vault",
-        description: "HashiCorp Vault CLI — lab secrets",
-        check: "vault --version".into(),
-        install: vec![Step {
-            title: "Install Vault",
-            cmd: match p.pkg {
-                PkgManager::Brew => "command -v vault >/dev/null 2>&1 || brew install hashicorp/tap/vault".into(),
-                PkgManager::Apt => r#"command -v vault >/dev/null 2>&1 || { curl -fsSL https://apt.releases.hashicorp.com/gpg | sudo gpg --dearmor -o /usr/share/keyrings/hashicorp-archive-keyring.gpg && echo "deb [signed-by=/usr/share/keyrings/hashicorp-archive-keyring.gpg] https://apt.releases.hashicorp.com $(lsb_release -cs) main" | sudo tee /etc/apt/sources.list.d/hashicorp.list && sudo apt-get update -y && sudo apt-get install -y vault; }"#.into(),
-            },
-        }],
-        ..Software::default()
-    });
-
-    // -- Go -----------------------------------------------------------------
-    list.push(Software {
-        name: "Go",
-        description: "Go toolchain for lab services",
-        check: "go version".into(),
-        install: vec![Step { title: "Install Go", cmd: pkg_install(p, "go", "golang-go", "go") }],
-        ..Software::default()
-    });
-
-    // -- Rust ---------------------------------------------------------------
-    list.push(Software {
-        name: "Rust",
-        description: "rustc + cargo via rustup",
-        check: r#". "$HOME/.cargo/env" 2>/dev/null; rustc --version"#.into(),
-        install: vec![Step {
-            title: "Install rustup toolchain",
-            cmd: r#"[ -x "$HOME/.cargo/bin/rustc" ] || { curl --proto '=https' --tlsv1.2 -fsSL https://sh.rustup.rs -o /tmp/rustup-init.sh && sh /tmp/rustup-init.sh -y --no-modify-path; }"#.into(),
-        }],
-        follow_up: vec![r#"echo '. "$HOME/.cargo/env"' >> ~/.zshrc"#],
-        ..Software::default()
-    });
-
-    // -- Node.js (fnm) ------------------------------------------------------
-    list.push(Software {
-        name: "Node.js",
-        description: "Node LTS via fnm — for React/TS apps",
-        check: r#"export PATH="$HOME/.local/share/fnm:$PATH"; eval "$(fnm env 2>/dev/null)"; node --version"#.into(),
-        install: vec![
-            Step {
-                title: "Install fnm",
-                cmd: match p.pkg {
-                    PkgManager::Brew => "command -v fnm >/dev/null 2>&1 || brew install fnm".into(),
-                    PkgManager::Apt => r#"command -v fnm >/dev/null 2>&1 || [ -x "$HOME/.local/share/fnm/fnm" ] || { curl -fsSL https://fnm.vercel.app/install -o /tmp/fnm-install.sh && bash /tmp/fnm-install.sh --skip-shell; }"#.into(),
-                },
-            },
-            Step {
-                title: "Install Node LTS",
-                cmd: r#"export PATH="$HOME/.local/share/fnm:$PATH"; eval "$(fnm env)"; fnm install --lts && fnm default lts-latest"#.into(),
-            },
-        ],
-        follow_up: vec![r#"echo 'eval "$(fnm env --use-on-cd)"' >> ~/.zshrc   # node in new shells"#],
-        ..Software::default()
-    });
-
-    // -- Bun ----------------------------------------------------------------
-    list.push(Software {
-        name: "Bun",
-        description: "bun — fast JS runtime/bundler used by some lab projects",
-        check: r#"export PATH="$HOME/.bun/bin:$PATH"; bun --version"#.into(),
-        install: vec![Step {
-            title: "Install Bun",
-            cmd: r#"export PATH="$HOME/.bun/bin:$PATH"; command -v bun >/dev/null 2>&1 || { curl -fsSL https://bun.sh/install -o /tmp/bun-install.sh && bash /tmp/bun-install.sh; }"#.into(),
-        }],
-        ..Software::default()
-    });
-
-    // -- pnpm ---------------------------------------------------------------
-    list.push(Software {
-        name: "pnpm",
-        description: "pnpm package manager (via corepack — needs Node.js)",
-        check: r#"export PATH="$HOME/.local/share/fnm:$PATH"; eval "$(fnm env 2>/dev/null)"; pnpm --version"#.into(),
-        install: vec![Step {
-            title: "Enable pnpm via corepack",
-            cmd: r#"export PATH="$HOME/.local/share/fnm:$PATH"; eval "$(fnm env)"; corepack enable pnpm"#.into(),
-        }],
-        ..Software::default()
-    });
-
-    // ---- Add new software above this line ---------------------------------
-    // Host GUI apps (e.g. Yaak) → location: Location::Host + winget_id.
-
-    // On a Windows host, Host apps check/install through winget instead of
-    // the brew/apt commands written above.
-    if windows_host {
-        for sw in &mut list {
-            if sw.location == Location::Host {
-                if let Some(id) = sw.winget_id {
-                    sw.check = format!("winget list -e --id {id}");
-                    sw.install = vec![Step {
-                        title: "Install via winget",
+    let (check, install): (String, Vec<Step>) = match platform.env {
+        // Windows host: GUI apps go through winget; CLI tools run in WSL using
+        // the linux block.
+        Env::WindowsHost => {
+            if gui {
+                let id = raw.winget_id.as_deref()?;
+                (
+                    format!("winget list -e --id {id}"),
+                    vec![Step {
+                        title: format!("Install {} via winget", raw.name),
                         cmd: format!(
                             "winget install -e --id {id} --accept-package-agreements --accept-source-agreements"
                         ),
-                    }];
-                }
+                    }],
+                )
+            } else {
+                block_commands(raw, os_block(raw, Env::LinuxDesktop))?
             }
+        }
+        // Linux server: no GUI apps.
+        Env::LinuxServer if gui => return None,
+        // Everyone else: use the matching OS block (or `any`).
+        env => block_commands(raw, os_block(raw, env))?,
+    };
+
+    Some(Software {
+        name: raw.name.clone(),
+        description: raw.description.clone(),
+        section,
+        preferred: raw.preferred,
+        location,
+        check,
+        install,
+        follow_up: raw.follow_up.clone(),
+    })
+}
+
+/// The command block that applies to `env`: the OS-specific one, else `any`.
+fn os_block(raw: &RawSoftware, env: Env) -> Option<&RawBlock> {
+    let os_specific = if env.is_linux() { &raw.linux } else { &raw.macos };
+    os_specific.as_ref().or(raw.any.as_ref())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::detect::Platform;
+
+    fn platform(env: Env) -> Platform {
+        Platform { arch: "x86_64", wsl: false, env, wsl_distro: None }
+    }
+
+    fn names(env: Env) -> Vec<String> {
+        load(&platform(env)).1.into_iter().map(|s| s.name).collect()
+    }
+
+    #[test]
+    fn json_parses_and_all_envs_resolve() {
+        for env in [Env::Macos, Env::LinuxDesktop, Env::LinuxServer, Env::WindowsHost] {
+            assert!(!load(&platform(env)).0.is_empty(), "sections missing");
+            assert!(!names(env).is_empty(), "no software resolved");
         }
     }
 
-    list
+    #[test]
+    fn linux_server_excludes_gui_apps() {
+        let server = names(Env::LinuxServer);
+        // GUI-only apps must not appear on a headless server...
+        for gui in ["VS Code", "Lens", "Yaak", "DBeaver", "Tower", "OrbStack"] {
+            assert!(!server.contains(&gui.to_string()), "{gui} leaked onto server");
+        }
+        // ...but CLI/TUI tools must.
+        for cli in ["Neovim", "k9s", "lazygit", "Rust", "Node.js"] {
+            assert!(server.contains(&cli.to_string()), "{cli} missing on server");
+        }
+    }
+
+    #[test]
+    fn linux_desktop_includes_supported_gui() {
+        let desktop = names(Env::LinuxDesktop);
+        assert!(desktop.contains(&"VS Code".to_string()));
+        assert!(desktop.contains(&"Zed".to_string()));
+    }
+
+    #[test]
+    fn every_resolved_tool_has_a_check_and_install() {
+        for env in [Env::Macos, Env::LinuxDesktop, Env::LinuxServer, Env::WindowsHost] {
+            for sw in load(&platform(env)).1 {
+                assert!(!sw.check.trim().is_empty(), "{} has empty check on {:?}", sw.name, env as u8);
+                assert!(!sw.install.is_empty(), "{} has no install steps", sw.name);
+                assert!(sw.install.iter().all(|s| !s.cmd.trim().is_empty()));
+            }
+        }
+    }
+}
+
+/// Resolve a block into (check, steps), applying the default check and default
+/// step titles. `None` when there's no block (tool not available here).
+fn block_commands(raw: &RawSoftware, block: Option<&RawBlock>) -> Option<(String, Vec<Step>)> {
+    let block = block?;
+    let check = block
+        .check
+        .clone()
+        .or_else(|| raw.check.clone())
+        .unwrap_or_default();
+    let install = block
+        .install
+        .iter()
+        .map(|s| Step {
+            title: s.title.clone().unwrap_or_else(|| format!("Install {}", raw.name)),
+            cmd: s.cmd.clone(),
+        })
+        .collect();
+    Some((check, install))
 }

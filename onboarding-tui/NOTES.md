@@ -1,10 +1,33 @@
 # Onboarding TUI PoC comparison notes
 
-> **Decision (2026-07-23): going with the Rust/ratatui PoC.** It now has the
-> Auburn-themed welcome screen, an automatic installed-vs-wanted scan, and a
-> modular software registry (`src/software.rs`) — add/remove a tool by editing
-> one `Software` entry there; every screen picks it up. The gum PoC below is
-> kept for reference.
+> **Decision (2026-07-23): going with the Rust/ratatui PoC.** Auburn-themed
+> welcome screen, automatic installed-vs-wanted scan, sectioned Ubuntu-style
+> checklist, Windows-host + WSL support, and a Linux desktop/server split.
+
+## Editing the software list
+
+All tools live in **`software.json`** — no Rust needed. Each entry has a
+`section`, a `kind` (`gui` or `cli`), per-OS command blocks (`macos` / `linux`
+/ `any`), a `check`, `install` steps, and optional `winget_id` / `follow_up`.
+`src/software.rs` loads and resolves it for the detected environment:
+
+| Environment | GUI apps | CLI/TUI tools |
+|---|---|---|
+| macOS | brew casks | brew formulae |
+| Linux **desktop** | `linux` block (skipped if none) | `linux` block |
+| Linux **server** | **excluded** | `linux` block |
+| Windows host | winget on the host | run inside the chosen WSL distro |
+
+Force a Linux mode for testing with `RFID_ONBOARD_LINUX=desktop|server`.
+`cargo test` verifies parsing + that GUI apps never leak onto a server.
+
+## Needs verification on real hosts
+
+- winget IDs / casks flagged as best-effort: **Yaak**, **Tower**, Lens,
+  MySQL Workbench, DataGrip (confirm with `winget search` / `brew info`).
+- Several GUI apps are macOS+Windows only (no `linux` block yet): Cursor,
+  Lens, Linear, Yaak, Bruno, the DB tools, Tower, GitHub Desktop. Add a
+  `linux` block (apt repo / flatpak / script) to offer them on Linux desktop.
 
 
 Two PoCs with the same feature set (platform detection, full/pick/doctor modes,
