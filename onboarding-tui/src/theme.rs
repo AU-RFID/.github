@@ -1,10 +1,14 @@
 //! Auburn University brand colors and shared styles.
-//! https://ocm.auburn.edu/brand/ — Auburn Orange #E87722, Auburn Navy #0C2340.
+//! Per the lab's color directory — Auburn Orange #E86100, Auburn Blue #0B2341.
 
 use ratatui::style::{Color, Modifier, Style};
 
-pub const ORANGE: Color = Color::Rgb(0xE8, 0x77, 0x22);
-pub const NAVY: Color = Color::Rgb(0x0C, 0x23, 0x40);
+pub const ORANGE: Color = Color::Rgb(0xE8, 0x61, 0x00);
+pub const NAVY: Color = Color::Rgb(0x0B, 0x23, 0x41);
+
+pub fn navy() -> Style {
+    Style::new().fg(NAVY).add_modifier(Modifier::BOLD)
+}
 /// Lighter navy-tinted gray for secondary text (pure navy is unreadable on dark terminals).
 pub const SLATE: Color = Color::Rgb(0x8A, 0x9B, 0xB0);
 pub const GOOD: Color = Color::Rgb(0x4C, 0xAF, 0x50);

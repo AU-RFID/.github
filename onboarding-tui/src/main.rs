@@ -28,15 +28,16 @@ use ratatui::widgets::{Block, Borders, List, ListItem, ListState, Paragraph, Wra
 use detect::{detect, Platform};
 use software::{registry, Software};
 
-const LOGO: [&str; 7] = [
-    "██████╗ ███████╗██╗██████╗ ",
-    "██╔══██╗██╔════╝██║██╔══██╗",
-    "██████╔╝█████╗  ██║██║  ██║",
-    "██╔══██╗██╔══╝  ██║██║  ██║",
-    "██║  ██║██║     ██║██████╔╝",
-    "╚═╝  ╚═╝╚═╝     ╚═╝╚═════╝ ",
-    "L A B  ·  A U B U R N",
+const LOGO: [&str; 6] = [
+    "██████╗ ███████╗██╗██████╗   ██╗      █████╗ ██████╗ ",
+    "██╔══██╗██╔════╝██║██╔══██╗  ██║     ██╔══██╗██╔══██╗",
+    "██████╔╝█████╗  ██║██║  ██║  ██║     ███████║██████╔╝",
+    "██╔══██╗██╔══╝  ██║██║  ██║  ██║     ██╔══██║██╔══██╗",
+    "██║  ██║██║     ██║██████╔╝  ███████╗██║  ██║██████╔╝",
+    "╚═╝  ╚═╝╚═╝     ╚═╝╚═════╝   ╚══════╝╚═╝  ╚═╝╚═════╝ ",
 ];
+
+const UNIVERSITY: &str = "A U B U R N   U N I V E R S I T Y";
 
 enum Screen {
     Welcome,
@@ -369,14 +370,16 @@ fn draw(f: &mut Frame, app: &mut App) {
 }
 
 fn draw_welcome(f: &mut Frame, app: &App) {
-    // Vertically center the whole block: logo + subtitle + buttons + hint.
-    let content_height = LOGO.len() as u16 + 6;
+    // Vertically center the whole block: logo + university + subtitle + buttons.
+    let content_height = LOGO.len() as u16 + 8;
     let [area] = Layout::vertical([Constraint::Length(content_height)])
         .flex(Flex::Center)
         .areas(f.area());
 
     let mut rows = Layout::vertical([
         Constraint::Length(LOGO.len() as u16), // logo
+        Constraint::Length(1),                 // spacer
+        Constraint::Length(1),                 // AUBURN UNIVERSITY
         Constraint::Length(1),                 // spacer
         Constraint::Length(1),                 // subtitle
         Constraint::Length(1),                 // spacer
@@ -386,18 +389,13 @@ fn draw_welcome(f: &mut Frame, app: &App) {
     .to_vec();
     let buttons_row = rows.pop().unwrap();
 
-    let logo_lines: Vec<Line> = LOGO
-        .iter()
-        .enumerate()
-        .map(|(i, l)| {
-            if i == LOGO.len() - 1 {
-                Line::styled(*l, theme::dim())
-            } else {
-                Line::styled(*l, theme::title())
-            }
-        })
-        .collect();
+    let logo_lines: Vec<Line> = LOGO.iter().map(|l| Line::styled(*l, theme::title())).collect();
     f.render_widget(Paragraph::new(logo_lines).centered(), rows[0]);
+
+    f.render_widget(
+        Paragraph::new(UNIVERSITY).style(theme::navy()).centered(),
+        rows[2],
+    );
 
     let dry = if app.dry_run { "  ·  DRY RUN" } else { "" };
     f.render_widget(
@@ -407,7 +405,7 @@ fn draw_welcome(f: &mut Frame, app: &App) {
         ))
         .style(theme::dim())
         .centered(),
-        rows[2],
+        rows[4],
     );
 
     // Two centered buttons side by side.
