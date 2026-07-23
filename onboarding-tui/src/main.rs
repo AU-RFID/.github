@@ -175,17 +175,25 @@ impl App {
         let (tx, rx) = mpsc::channel();
         self.rx = Some(rx);
         let dry_run = self.dry_run;
+        // Run every check on its own thread so a slow tool never blocks the
+        // others; results stream back as each finishes, then ScanDone.
         thread::spawn(move || {
-            for (i, (check, exec)) in checks.iter().enumerate() {
-                // Dry run: pretend nothing is installed so the full first-day
-                // flow (everything missing → install → summary) can be previewed.
-                let result = if dry_run {
-                    thread::sleep(Duration::from_millis(200)); // keep the checking… animation visible
-                    None
-                } else {
-                    run_check(check, exec)
-                };
-                let _ = tx.send(Msg::Check(i, result));
+            let mut handles = Vec::new();
+            for (i, (check, exec)) in checks.into_iter().enumerate() {
+                let tx = tx.clone();
+                handles.push(thread::spawn(move || {
+                    let result = if dry_run {
+                        // Preview a fresh machine: everything reads as missing.
+                        thread::sleep(Duration::from_millis(150 + (i as u64 % 6) * 60));
+                        None
+                    } else {
+                        run_check(&check, &exec)
+                    };
+                    let _ = tx.send(Msg::Check(i, result));
+                }));
+            }
+            for h in handles {
+                let _ = h.join();
             }
             let _ = tx.send(Msg::ScanDone);
         });
@@ -267,9 +275,20 @@ impl App {
                     }
                 }
             } else {
-                // Re-check everything so the summary shows the real post-install state.
-                for i in 0..self.items.len() {
-                    self.states[i] = match run_check(&self.items[i].check, &self.exec_for(i)) {
+                // Re-check everything (in parallel) so the summary shows the
+                // real post-install state.
+                let jobs: Vec<(String, Exec)> = (0..self.items.len())
+                    .map(|i| (self.items[i].check.clone(), self.exec_for(i)))
+                    .collect();
+                let results: Vec<Option<String>> = thread::scope(|s| {
+                    let handles: Vec<_> = jobs
+                        .iter()
+                        .map(|(c, e)| s.spawn(move || run_check(c, e)))
+                        .collect();
+                    handles.into_iter().map(|h| h.join().unwrap()).collect()
+                });
+                for (i, r) in results.into_iter().enumerate() {
+                    self.states[i] = match r {
                         Some(d) => ItemState::Installed(d),
                         None => ItemState::Missing,
                     };
@@ -325,18 +344,28 @@ impl App {
         self.sections[self.items[i].section].rule
     }
 
-    /// The first `pick-one` section with nothing installed or selected, if any.
-    /// Returns its title for the footer warning.
+    /// The first `pick-one` section that has items available but none
+    /// installed or selected. Returns its title for the footer warning.
+    /// Sections with no items on this platform (e.g. GUI-only on a server)
+    /// are treated as satisfied.
     fn unsatisfied_pick_one(&self) -> Option<&str> {
         for (si, sec) in self.sections.iter().enumerate() {
             if sec.rule != Rule::PickOne {
                 continue;
             }
-            let satisfied = self.items.iter().enumerate().any(|(i, sw)| {
-                sw.section == si
-                    && (matches!(self.states[i], ItemState::Installed(_)) || self.selected[i])
-            });
-            if !satisfied {
+            let mut has_items = false;
+            let mut satisfied = false;
+            for (i, sw) in self.items.iter().enumerate() {
+                if sw.section != si {
+                    continue;
+                }
+                has_items = true;
+                if matches!(self.states[i], ItemState::Installed(_)) || self.selected[i] {
+                    satisfied = true;
+                    break;
+                }
+            }
+            if has_items && !satisfied {
                 return Some(sec.title.trim());
             }
         }
@@ -690,17 +719,18 @@ fn hint(f: &mut Frame, area: Rect, text: &str) {
     f.render_widget(Paragraph::new(text).style(theme::dim()), area);
 }
 
-/// Build the display line for one software item (Ubuntu-installer style:
-/// `[X]` selected, `[ ]` unselected, locked `[X]` for required-missing).
+/// Build the display line for one software item — fixed-width columns so the
+/// checkbox, name, preferred tag, and status all line up down the list.
+/// Status is `✓ installed` (green) when present, blank otherwise.
 fn scan_line<'a>(app: &'a App, i: usize) -> Line<'a> {
     let sw = &app.items[i];
-    let (icon, style) = match &app.states[i] {
-        ItemState::Checking => ("⏳ checking…".to_string(), theme::dim()),
-        ItemState::Installed(d) => (format!("✓ {d}"), theme::good()),
-        ItemState::Missing => ("✗ missing".to_string(), theme::bad()),
+    let (status_text, status_style) = match &app.states[i] {
+        ItemState::Checking => ("…".to_string(), theme::dim()),
+        ItemState::Installed(_) => ("✓ installed".to_string(), theme::good()),
+        ItemState::Missing => (String::new(), theme::dim()),
     };
-    // Checkbox: optional missing tools toggle with space; required missing
-    // tools are locked in; installed tools have nothing to pick.
+    // Checkbox: optional/pick-one missing tools toggle with space; required
+    // missing tools are locked in; installed tools have nothing to pick.
     let mark = if !app.scan_done || !matches!(app.states[i], ItemState::Missing) {
         "    "
     } else if app.rule_of(i) == Rule::Required || app.selected[i] {
@@ -708,12 +738,12 @@ fn scan_line<'a>(app: &'a App, i: usize) -> Line<'a> {
     } else {
         "[ ] "
     };
-    let star = if sw.preferred { "★ preferred  " } else { "" };
+    let star = if sw.preferred { "★ preferred" } else { "" };
     Line::from(vec![
         Span::styled(format!(" {mark}"), theme::border()),
-        Span::styled(format!("{:<20}", sw.name), Style::new().bold()),
-        Span::styled(star, theme::title()),
-        Span::styled(icon, style),
+        Span::styled(format!("{:<22}", sw.name), Style::new().bold()),
+        Span::styled(format!("{star:<12}"), theme::title()),
+        Span::styled(status_text, status_style),
     ])
 }
 

@@ -17,8 +17,8 @@
   "sections": [
     { "id": "editors",    "title": " Code Editors — pick at least one ", "rule": "pick-one" },
     { "id": "containers", "title": " Docker / Kubernetes — optional ",    "rule": "optional" },
-    { "id": "api",        "title": " API / HTTP Clients — optional ",     "rule": "optional" },
-    { "id": "database",   "title": " Database Tools — optional ",         "rule": "optional" },
+    { "id": "api",        "title": " API / HTTP Clients — pick at least one ", "rule": "pick-one" },
+    { "id": "database",   "title": " Database Tools — pick at least one ",     "rule": "pick-one" },
     { "id": "git",        "title": " Git Tools — optional ",              "rule": "optional" },
     { "id": "ai",         "title": " AI Tools — optional ",               "rule": "optional" },
     { "id": "required",   "title": " Required ",                          "rule": "required" }
@@ -107,7 +107,6 @@
       "description": "d4s — feature-rich terminal UI for Docker",
       "section": "containers",
       "kind": "cli",
-      "preferred": true,
       "check": "export PATH=$HOME/.local/bin:$PATH; d4s --version | head -1",
       "macos": { "install": [ { "cmd": "command -v d4s >/dev/null 2>&1 || brew install jr-k/d4s/d4s" } ] },
       "linux": { "install": [ { "cmd": "export PATH=$HOME/.local/bin:$PATH; command -v d4s >/dev/null 2>&1 || { curl -fsSL https://d4scli.io/install.sh -o /tmp/d4s-install.sh && sh /tmp/d4s-install.sh $HOME/.local/bin; }" } ] }
@@ -117,7 +116,6 @@
       "description": "k9s — terminal UI for Kubernetes clusters",
       "section": "containers",
       "kind": "cli",
-      "preferred": true,
       "check": "k9s version 2>/dev/null | head -1",
       "macos": { "install": [ { "cmd": "command -v k9s >/dev/null 2>&1 || brew install k9s" } ] },
       "linux": { "install": [ { "cmd": "command -v k9s >/dev/null 2>&1 || { A=$(dpkg --print-architecture 2>/dev/null || echo amd64); curl -fsSL https://github.com/derailed/k9s/releases/latest/download/k9s_Linux_${A}.tar.gz -o /tmp/k9s.tgz && tar -xzf /tmp/k9s.tgz -C /tmp k9s && sudo install /tmp/k9s /usr/local/bin/k9s; }" } ] }
@@ -136,6 +134,7 @@
       "description": "Lens Desktop — GUI for managing Kubernetes clusters",
       "section": "containers",
       "kind": "gui",
+      "preferred": true,
       "winget_id": "Mirantis.Lens",
       "macos": {
         "check": "test -d '/Applications/Lens.app' && echo installed",
@@ -148,6 +147,7 @@
       "description": "Yaak — modern desktop API client (REST/GraphQL/gRPC)",
       "section": "api",
       "kind": "gui",
+      "preferred": true,
       "winget_id": "Yaak.Yaak",
       "macos": {
         "check": "test -d '/Applications/Yaak.app' && echo installed",
