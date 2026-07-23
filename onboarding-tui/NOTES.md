@@ -1,5 +1,12 @@
 # Onboarding TUI PoC comparison notes
 
+> **Decision (2026-07-23): going with the Rust/ratatui PoC.** It now has the
+> Auburn-themed welcome screen, an automatic installed-vs-wanted scan, and a
+> modular software registry (`src/software.rs`) — add/remove a tool by editing
+> one `Software` entry there; every screen picks it up. The gum PoC below is
+> kept for reference.
+
+
 Two PoCs with the same feature set (platform detection, full/pick/doctor modes,
 idempotent installs of core+node+rust+go):
 
