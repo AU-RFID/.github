@@ -1,0 +1,14 @@
+[package]
+name = "onboarding-tui"
+version = "0.1.0"
+edition = "2021"
+description = "RFID Lab onboarding TUI (PoC 2: Rust + ratatui)"
+license = "MIT"
+
+[dependencies]
+ratatui = "0.29"
+crossterm = "0.28"
+
+[profile.release]
+strip = true
+lto = true
