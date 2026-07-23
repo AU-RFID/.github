@@ -301,9 +301,19 @@ fn main() -> io::Result<()> {
         }
     }
 
+    // Restore the terminal even if we panic — otherwise the user's shell is
+    // left in raw mode with the alternate screen still active.
+    let orig_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        let _ = disable_raw_mode();
+        let _ = io::stdout().execute(LeaveAlternateScreen);
+        orig_hook(info);
+    }));
+
     enable_raw_mode()?;
     io::stdout().execute(EnterAlternateScreen)?;
     let mut terminal = Terminal::new(CrosstermBackend::new(io::stdout()))?;
+    terminal.clear()?;
 
     let res = run_app(&mut terminal, dry_run);
 
@@ -563,7 +573,8 @@ fn draw_scan(f: &mut Frame, app: &mut App) {
         req_area,
         Section::Required.title(),
         &app.order_req,
-        (!in_ai).then_some(app.cursor - app.order_ai.len()),
+        // then (not then_some): the subtraction must be lazy, it underflows when in_ai
+        (!in_ai).then(|| app.cursor - app.order_ai.len()),
     );
 
     // Description of the highlighted item.
