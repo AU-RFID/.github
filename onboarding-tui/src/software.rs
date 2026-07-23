@@ -19,7 +19,7 @@ use crate::detect::{Env, Platform};
 // Runtime model (what the UI uses)
 // ---------------------------------------------------------------------------
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Rule {
     PickOne,
     Optional,
@@ -29,6 +29,9 @@ pub enum Rule {
 pub struct SectionDef {
     pub title: String,
     pub rule: Rule,
+    /// Collapsible sections start collapsed (just a header) and can be
+    /// expanded — for tooling not everyone needs (e.g. Kubernetes).
+    pub collapsible: bool,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -64,6 +67,8 @@ struct RawSection {
     id: String,
     title: String,
     rule: String,
+    #[serde(default)]
+    collapsed: bool,
 }
 
 #[derive(Deserialize)]
@@ -123,7 +128,11 @@ pub fn load(platform: &Platform) -> (Vec<SectionDef>, Vec<Software>) {
     let sections: Vec<SectionDef> = data
         .sections
         .iter()
-        .map(|s| SectionDef { title: s.title.clone(), rule: parse_rule(&s.rule) })
+        .map(|s| SectionDef {
+            title: s.title.clone(),
+            rule: parse_rule(&s.rule),
+            collapsible: s.collapsed,
+        })
         .collect();
     let section_index = |id: &str| data.sections.iter().position(|s| s.id == id);
 
@@ -228,6 +237,18 @@ mod tests {
         let desktop = names(Env::LinuxDesktop);
         assert!(desktop.contains(&"VS Code".to_string()));
         assert!(desktop.contains(&"Zed".to_string()));
+    }
+
+    #[test]
+    fn kubernetes_section_is_collapsible_and_teams_required() {
+        let (sections, items) = load(&platform(Env::Macos));
+        // Exactly the Kubernetes section is collapsible.
+        let collapsible: Vec<&SectionDef> = sections.iter().filter(|s| s.collapsible).collect();
+        assert_eq!(collapsible.len(), 1);
+        assert!(collapsible[0].title.contains("Kubernetes"));
+        // Microsoft Teams is present and lives in a Required section.
+        let teams = items.iter().find(|s| s.name == "Microsoft Teams").expect("Teams missing");
+        assert_eq!(sections[teams.section].rule, Rule::Required);
     }
 
     #[test]

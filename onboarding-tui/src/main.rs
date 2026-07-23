@@ -134,6 +134,14 @@ struct StepStatus {
     state: StepState,
 }
 
+/// A navigable row on the scan screen: a collapsed section's header, or a
+/// software item.
+#[derive(Clone, Copy)]
+enum Nav {
+    Header(usize), // section index
+    Item(usize),   // item index
+}
+
 struct App {
     dry_run: bool,
     platform: Platform,
@@ -143,7 +151,10 @@ struct App {
     /// One box per non-empty section (by section index). Each holds the item
     /// indices shown in that box.
     boxes: Vec<(usize, Vec<usize>)>,
-    /// Cursor position over the combined display order across all boxes.
+    /// Per-section collapsed state (indexed by section index). Only ever true
+    /// for collapsible sections.
+    collapsed: Vec<bool>,
+    /// Cursor position over the nav rows (see `nav_rows`).
     cursor: usize,
     /// One-shot warning shown in the footer (e.g. "pick an editor").
     notice: Option<String>,
@@ -176,12 +187,16 @@ impl App {
             })
             .collect();
 
+        // Collapsible sections start collapsed.
+        let collapsed: Vec<bool> = sections.iter().map(|s| s.collapsible).collect();
+
         App {
             dry_run,
             platform,
             items,
             sections,
             boxes,
+            collapsed,
             cursor: 0,
             notice: None,
             distros: Vec::new(),
@@ -326,30 +341,70 @@ impl App {
             .collect()
     }
 
-    /// Total number of selectable rows across every box.
-    fn total_rows(&self) -> usize {
-        self.boxes.iter().map(|(_, o)| o.len()).sum()
+    /// The scan screen's navigable rows, top to bottom: a collapsed section
+    /// contributes a single header row; every other section contributes its
+    /// item rows. This is the single source of truth for cursor movement.
+    fn nav_rows(&self) -> Vec<Nav> {
+        let mut rows = Vec::new();
+        for (sec, order) in &self.boxes {
+            if self.collapsed[*sec] {
+                rows.push(Nav::Header(*sec));
+            } else {
+                rows.extend(order.iter().map(|&i| Nav::Item(i)));
+            }
+        }
+        rows
     }
 
-    /// Move the Scan-screen cursor across all boxes.
+    /// The nav row under the cursor.
+    fn cursor_nav(&self) -> Option<Nav> {
+        self.nav_rows().get(self.cursor).copied()
+    }
+
+    /// Move the Scan-screen cursor across the nav rows (wrapping).
     fn move_row(&mut self, delta: i32) {
-        let len = self.total_rows();
+        let len = self.nav_rows().len();
         if len == 0 {
             return;
         }
         self.cursor = (self.cursor as i32 + delta).rem_euclid(len as i32) as usize;
     }
 
-    /// The software item under the Scan-screen cursor.
+    /// The software item under the cursor, if the cursor is on an item row.
     fn cursor_item(&self) -> Option<usize> {
-        let mut c = self.cursor;
-        for (_, order) in &self.boxes {
-            if c < order.len() {
-                return order.get(c).copied();
-            }
-            c -= order.len();
+        match self.cursor_nav()? {
+            Nav::Item(i) => Some(i),
+            Nav::Header(_) => None,
         }
-        None
+    }
+
+    /// Expand/collapse the section under the cursor, keeping the cursor on that
+    /// section (its header when collapsed, its first item when expanded).
+    fn set_collapsed(&mut self, sec: usize, want: bool) {
+        if !self.sections[sec].collapsible || self.collapsed[sec] == want {
+            return;
+        }
+        self.collapsed[sec] = want;
+        let rows = self.nav_rows();
+        self.cursor = rows
+            .iter()
+            .position(|r| match r {
+                Nav::Header(s) => *s == sec,
+                Nav::Item(i) => self.items[*i].section == sec,
+            })
+            .unwrap_or(0);
+    }
+
+    /// Toggle the collapse state of the section under the cursor, if collapsible.
+    fn toggle_collapse_at_cursor(&mut self) {
+        if let Some(sec) = self.cursor_nav().map(|n| match n {
+            Nav::Header(s) => s,
+            Nav::Item(i) => self.items[i].section,
+        }) {
+            if self.sections[sec].collapsible {
+                self.set_collapsed(sec, !self.collapsed[sec]);
+            }
+        }
     }
 
     /// Where item `i`'s commands run: locally, or (from a Windows host) inside
@@ -589,17 +644,31 @@ fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, dry_run: bool)
                 KeyCode::Esc => app.screen = Screen::Welcome,
                 KeyCode::Up | KeyCode::Char('k') => app.move_row(-1),
                 KeyCode::Down | KeyCode::Char('j') => app.move_row(1),
+                // →/l expands a collapsed section; ←/h collapses.
+                KeyCode::Right | KeyCode::Char('l') => {
+                    if let Some(Nav::Header(sec)) = app.cursor_nav() {
+                        app.set_collapsed(sec, false);
+                    }
+                }
+                KeyCode::Left | KeyCode::Char('h') => {
+                    if let Some(i) = app.cursor_item() {
+                        app.set_collapsed(app.items[i].section, true);
+                    }
+                }
                 KeyCode::Char(' ') => {
-                    // Missing optional/pick-one tools can be toggled; required
-                    // missing tools are locked in.
-                    if app.scan_done {
+                    if !app.scan_done {
+                        // ignore
+                    } else if matches!(app.cursor_nav(), Some(Nav::Header(_))) {
+                        // Space on a collapsed section header expands it.
+                        app.toggle_collapse_at_cursor();
+                    } else if let Some(i) = app.cursor_item() {
+                        // Missing optional/pick-one tools can be toggled;
+                        // required missing tools are locked in.
                         app.notice = None;
-                        if let Some(i) = app.cursor_item() {
-                            if matches!(app.states[i], ItemState::Missing)
-                                && app.rule_of(i) != Rule::Required
-                            {
-                                app.selected[i] = !app.selected[i];
-                            }
+                        if matches!(app.states[i], ItemState::Missing)
+                            && app.rule_of(i) != Rule::Required
+                        {
+                            app.selected[i] = !app.selected[i];
                         }
                     }
                 }
@@ -826,6 +895,32 @@ fn scan_box(f: &mut Frame, app: &App, area: Rect, title: &str, order: &[usize], 
     f.render_stateful_widget(list, area, &mut state);
 }
 
+/// A collapsed section's box title carries a ▸; an expanded collapsible one a ▾.
+fn box_title(app: &App, sec: usize) -> String {
+    let t = &app.sections[sec].title;
+    if app.sections[sec].collapsible {
+        let arrow = if app.collapsed[sec] { "▸" } else { "▾" };
+        format!(" {arrow}{t}")
+    } else {
+        t.clone()
+    }
+}
+
+/// Render a collapsed section as a single line: just its header plus a hint to
+/// expand. Highlighted (selected) when the cursor is on it.
+fn render_collapsed_box(f: &mut Frame, app: &App, area: Rect, sec: usize, count: usize, selected: bool) {
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(theme::border())
+        .title(box_title(app, sec));
+    let (text, style) = if selected {
+        (format!(" > {count} tools — →/space to expand "), theme::highlight())
+    } else {
+        (format!("   {count} tools — →/space to expand"), theme::dim())
+    };
+    f.render_widget(Paragraph::new(text).style(style).block(block), area);
+}
+
 fn draw_scan(f: &mut Frame, app: &mut App) {
     let (body, footer) = chrome(f, app, "What you have vs. what we use");
 
@@ -833,21 +928,24 @@ fn draw_scan(f: &mut Frame, app: &mut App) {
     let [boxes_area, detail_area] =
         Layout::vertical([Constraint::Min(3), Constraint::Length(4)]).areas(body);
 
-    let heights: Vec<u16> = app.boxes.iter().map(|(_, o)| o.len() as u16 + 2).collect();
+    // A collapsed box is one line tall (plus borders); otherwise it sizes to
+    // its items.
+    let heights: Vec<u16> = app
+        .boxes
+        .iter()
+        .map(|(sec, o)| if app.collapsed[*sec] { 3 } else { o.len() as u16 + 2 })
+        .collect();
 
-    // Which box holds the cursor, and its offset within that box.
-    let (cur_box, cur_local) = {
-        let mut c = app.cursor;
-        let mut bi = 0;
-        for (i, (_, order)) in app.boxes.iter().enumerate() {
-            if c < order.len() {
-                bi = i;
-                break;
-            }
-            c -= order.len();
-        }
-        (bi, c)
-    };
+    // Locate the cursor: which section it's in (→ which box) and, if on an
+    // item, that item's index.
+    let cur = app.cursor_nav();
+    let cur_section = cur.map(|n| match n {
+        Nav::Header(s) => s,
+        Nav::Item(i) => app.items[i].section,
+    });
+    let cur_box = cur_section
+        .and_then(|cs| app.boxes.iter().position(|(s, _)| *s == cs))
+        .unwrap_or(0);
 
     // Scroll by whole boxes so the cursor's box is always fully visible.
     let avail = boxes_area.height;
@@ -877,17 +975,28 @@ fn draw_scan(f: &mut Frame, app: &mut App) {
     let areas = Layout::vertical(constraints).split(boxes_area);
 
     for (slot, j) in (start..=end).enumerate() {
-        let (section_idx, order) = &app.boxes[j];
-        let local = (j == cur_box).then_some(cur_local);
-        scan_box(f, app, areas[slot], &app.sections[*section_idx].title, order, local);
+        let (sec, order) = &app.boxes[j];
+        let (sec, area) = (*sec, areas[slot]);
+        if app.collapsed[sec] {
+            let selected = matches!(cur, Some(Nav::Header(s)) if s == sec);
+            render_collapsed_box(f, app, area, sec, order.len(), selected);
+        } else {
+            let local = match cur {
+                Some(Nav::Item(i)) if app.items[i].section == sec => {
+                    order.iter().position(|&x| x == i)
+                }
+                _ => None,
+            };
+            scan_box(f, app, area, &box_title(app, sec), order, local);
+        }
     }
 
-    // Description of the highlighted item.
-    let desc = app
-        .cursor_item()
-        .and_then(|i| app.items.get(i))
-        .map(|sw| sw.description.as_str())
-        .unwrap_or("");
+    // About pane: item description, or a hint on a collapsed header.
+    let desc = match cur {
+        Some(Nav::Item(i)) => app.items[i].description.clone(),
+        Some(Nav::Header(_)) => "Optional tooling — expand to see what's inside.".to_string(),
+        None => String::new(),
+    };
     f.render_widget(
         Paragraph::new(desc).style(theme::dim()).wrap(Wrap { trim: true }).block(
             Block::default()
@@ -907,7 +1016,15 @@ fn draw_scan(f: &mut Frame, app: &mut App) {
         f.render_widget(Paragraph::new(format!(" ⚠ {notice}")).style(theme::bad()), footer);
     } else if app.scan_done {
         let n = app.selected.iter().filter(|s| **s).count();
-        hint(f, footer, &format!("{scroll} space toggle · enter install {n} selected · r rescan · esc back · q quit"));
+        let hint_text = match cur {
+            Some(Nav::Header(_)) => {
+                format!("{scroll} →/space expand · enter install {n} selected · r rescan · q quit")
+            }
+            _ => format!(
+                "{scroll} space toggle · ←/→ collapse/expand · enter install {n} selected · r rescan · q quit"
+            ),
+        };
+        hint(f, footer, &hint_text);
     } else {
         hint(f, footer, "scanning your system…");
     }
