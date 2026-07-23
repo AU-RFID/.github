@@ -72,11 +72,14 @@ struct App {
     dry_run: bool,
     platform: Platform,
     items: Vec<Software>,
-    /// Item indices shown in the AI Tools box, then the Required box.
+    /// Item indices per box, in display order (Editors, AI Tools, Required).
+    order_editors: Vec<usize>,
     order_ai: Vec<usize>,
     order_req: Vec<usize>,
-    /// Cursor position over the combined display order (AI first, then Required).
+    /// Cursor position over the combined display order across all boxes.
     cursor: usize,
+    /// One-shot warning shown in the footer (e.g. "pick an editor").
+    notice: Option<String>,
     states: Vec<ItemState>,
     selected: Vec<bool>,
     screen: Screen,
@@ -95,19 +98,24 @@ impl App {
         let items = registry(&platform);
         let n = items.len();
 
-        // Split the registry into the two boxes; software.rs stays the single
+        // Split the registry into the boxes; software.rs stays the single
         // source of truth for which tool belongs where.
-        let order_ai: Vec<usize> = (0..n).filter(|&i| items[i].section == Section::Ai).collect();
-        let order_req: Vec<usize> =
-            (0..n).filter(|&i| items[i].section == Section::Required).collect();
+        let by_section = |s: Section| -> Vec<usize> {
+            (0..n).filter(|&i| items[i].section == s).collect()
+        };
+        let order_editors = by_section(Section::Editors);
+        let order_ai = by_section(Section::Ai);
+        let order_req = by_section(Section::Required);
 
         App {
             dry_run,
             platform,
             items,
+            order_editors,
             order_ai,
             order_req,
             cursor: 0,
+            notice: None,
             states: vec![ItemState::Checking; n],
             selected: vec![false; n],
             screen: Screen::Welcome,
@@ -233,9 +241,9 @@ impl App {
         }
     }
 
-    /// Move the Scan-screen cursor across both boxes (AI Tools then Required).
+    /// Move the Scan-screen cursor across all boxes (Editors → AI → Required).
     fn move_row(&mut self, delta: i32) {
-        let len = (self.order_ai.len() + self.order_req.len()) as i32;
+        let len = (self.order_editors.len() + self.order_ai.len() + self.order_req.len()) as i32;
         if len == 0 {
             return;
         }
@@ -244,11 +252,21 @@ impl App {
 
     /// The software item under the Scan-screen cursor.
     fn cursor_item(&self) -> Option<usize> {
-        if self.cursor < self.order_ai.len() {
-            self.order_ai.get(self.cursor).copied()
-        } else {
-            self.order_req.get(self.cursor - self.order_ai.len()).copied()
+        let mut c = self.cursor;
+        for order in [&self.order_editors, &self.order_ai, &self.order_req] {
+            if c < order.len() {
+                return order.get(c).copied();
+            }
+            c -= order.len();
         }
+        None
+    }
+
+    /// At least one editor must end up on the machine: already installed or selected.
+    fn editor_picked(&self) -> bool {
+        self.order_editors.iter().any(|&i| {
+            matches!(self.states[i], ItemState::Installed(_)) || self.selected[i]
+        })
     }
 }
 
@@ -376,12 +394,13 @@ fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, dry_run: bool)
                 KeyCode::Up | KeyCode::Char('k') => app.move_row(-1),
                 KeyCode::Down | KeyCode::Char('j') => app.move_row(1),
                 KeyCode::Char(' ') => {
-                    // Only optional (AI) missing tools can be toggled; required
+                    // Missing editors and AI tools can be toggled; required
                     // missing tools are locked in.
                     if app.scan_done {
+                        app.notice = None;
                         if let Some(i) = app.cursor_item() {
                             if matches!(app.states[i], ItemState::Missing)
-                                && app.items[i].section == Section::Ai
+                                && app.items[i].section != Section::Required
                             {
                                 app.selected[i] = !app.selected[i];
                             }
@@ -390,13 +409,18 @@ fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, dry_run: bool)
                 }
                 KeyCode::Char('r') => {
                     if app.scan_done {
+                        app.notice = None;
                         app.start_scan();
                     }
                 }
-                KeyCode::Enter
-                    if app.scan_done => {
+                KeyCode::Enter if app.scan_done => {
+                    if app.editor_picked() {
                         app.start_install();
+                    } else {
+                        app.notice =
+                            Some("Pick at least one code editor (space to select)".into());
                     }
+                }
                 _ => {}
             },
             Screen::Install => {
@@ -567,33 +591,29 @@ fn scan_box(f: &mut Frame, app: &App, area: Rect, title: &str, order: &[usize], 
 fn draw_scan(f: &mut Frame, app: &mut App) {
     let (body, footer) = chrome(f, app, "What you have vs. what we use");
 
-    let ai_h = app.order_ai.len() as u16 + 2;
-    let req_h = app.order_req.len() as u16 + 2;
-    let [ai_area, req_area, detail_area] = Layout::vertical([
-        Constraint::Length(ai_h),
-        Constraint::Length(req_h),
+    let [ed_area, ai_area, req_area, detail_area] = Layout::vertical([
+        Constraint::Length(app.order_editors.len() as u16 + 2),
+        Constraint::Length(app.order_ai.len() as u16 + 2),
+        Constraint::Length(app.order_req.len() as u16 + 2),
         Constraint::Length(4),
     ])
     .areas(body);
 
-    let in_ai = app.cursor < app.order_ai.len();
-    scan_box(
-        f,
-        app,
-        ai_area,
-        Section::Ai.title(),
-        &app.order_ai,
-        in_ai.then_some(app.cursor),
-    );
-    scan_box(
-        f,
-        app,
-        req_area,
-        Section::Required.title(),
-        &app.order_req,
-        // then (not then_some): the subtraction must be lazy, it underflows when in_ai
-        (!in_ai).then(|| app.cursor - app.order_ai.len()),
-    );
+    // One cursor spans the boxes; give each box its local offset (or None).
+    let boxes = [
+        (ed_area, Section::Editors.title(), &app.order_editors),
+        (ai_area, Section::Ai.title(), &app.order_ai),
+        (req_area, Section::Required.title(), &app.order_req),
+    ];
+    let mut rem = Some(app.cursor);
+    for (area, title, order) in boxes {
+        let local = rem.filter(|c| *c < order.len());
+        scan_box(f, app, area, title, order, local);
+        rem = match rem {
+            Some(c) if c >= order.len() => Some(c - order.len()),
+            _ => None, // cursor was in this box; no later box highlights
+        };
+    }
 
     // Description of the highlighted item.
     let desc = app
@@ -611,9 +631,11 @@ fn draw_scan(f: &mut Frame, app: &mut App) {
         detail_area,
     );
 
-    if app.scan_done {
+    if let Some(notice) = &app.notice {
+        f.render_widget(Paragraph::new(format!(" ⚠ {notice}")).style(theme::bad()), footer);
+    } else if app.scan_done {
         let n = app.selected.iter().filter(|s| **s).count();
-        hint(f, footer, &format!("space toggle AI tools · enter install {n} selected (required auto-included) · r rescan · esc back · q quit"));
+        hint(f, footer, &format!("space toggle · enter install {n} selected (required auto-included) · r rescan · esc back · q quit"));
     } else {
         hint(f, footer, "scanning your system…");
     }

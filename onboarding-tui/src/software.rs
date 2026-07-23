@@ -19,6 +19,7 @@ use crate::detect::{Platform, PkgManager};
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Section {
+    Editors,
     Ai,
     Required,
 }
@@ -26,6 +27,7 @@ pub enum Section {
 impl Section {
     pub fn title(&self) -> &'static str {
         match self {
+            Section::Editors => " Code Editors — pick at least one ",
             Section::Ai => " AI Tools — optional ",
             Section::Required => " Required ",
         }
@@ -70,6 +72,107 @@ fn script_install(probe: &str, url: &str) -> String {
 #[allow(clippy::vec_init_then_push)]
 pub fn registry(p: &Platform) -> Vec<Software> {
     let mut list = Vec::new();
+
+    // =======================================================================
+    // Code editors (multi-select, at least one required)
+    // =======================================================================
+
+    list.push(Software {
+        name: "VS Code",
+        description: "Visual Studio Code — the most common choice, big extension ecosystem",
+        section: Section::Editors,
+        check: match p.pkg {
+            PkgManager::Brew => r#"test -d "/Applications/Visual Studio Code.app" && echo "VS Code installed" || code --version | head -1"#.into(),
+            PkgManager::Apt => "code --version | head -1".into(),
+        },
+        install: vec![Step {
+            title: "Install VS Code",
+            cmd: match p.pkg {
+                PkgManager::Brew => r#"test -d "/Applications/Visual Studio Code.app" || brew install --cask visual-studio-code"#.into(),
+                PkgManager::Apt => r#"command -v code >/dev/null 2>&1 || { curl -fsSL https://packages.microsoft.com/keys/microsoft.asc | sudo gpg --dearmor -o /usr/share/keyrings/ms-vscode-keyring.gpg && echo "deb [signed-by=/usr/share/keyrings/ms-vscode-keyring.gpg] https://packages.microsoft.com/repos/code stable main" | sudo tee /etc/apt/sources.list.d/vscode.list && sudo apt-get update -y && sudo apt-get install -y code; }"#.into(),
+            },
+        }],
+        follow_up: vec![],
+    });
+
+    list.push(Software {
+        name: "VSCodium",
+        description: "VS Code without Microsoft telemetry/branding",
+        section: Section::Editors,
+        check: match p.pkg {
+            PkgManager::Brew => r#"test -d "/Applications/VSCodium.app" && echo "VSCodium installed" || codium --version | head -1"#.into(),
+            PkgManager::Apt => "codium --version | head -1".into(),
+        },
+        install: vec![Step {
+            title: "Install VSCodium",
+            cmd: match p.pkg {
+                PkgManager::Brew => r#"test -d "/Applications/VSCodium.app" || brew install --cask vscodium"#.into(),
+                PkgManager::Apt => r#"command -v codium >/dev/null 2>&1 || { curl -fsSL https://gitlab.com/paulcarroty/vscodium-deb-rpm-repo/raw/master/pub.gpg | sudo gpg --dearmor -o /usr/share/keyrings/vscodium-archive-keyring.gpg && echo "deb [signed-by=/usr/share/keyrings/vscodium-archive-keyring.gpg] https://download.vscodium.com/debs vscodium main" | sudo tee /etc/apt/sources.list.d/vscodium.list && sudo apt-get update -y && sudo apt-get install -y codium; }"#.into(),
+            },
+        }],
+        follow_up: vec![],
+    });
+
+    // Desktop app (macOS cask); WSL/Linux users generally run the Windows/
+    // native build outside the terminal — only offered on macOS.
+    if p.pkg == PkgManager::Brew {
+        list.push(Software {
+            name: "Cursor",
+            description: "Cursor — AI-first VS Code fork (editor app; CLI is under AI Tools)",
+            section: Section::Editors,
+            check: r#"test -d "/Applications/Cursor.app" && echo "Cursor installed""#.into(),
+            install: vec![Step {
+                title: "Install Cursor",
+                cmd: r#"test -d "/Applications/Cursor.app" || brew install --cask cursor"#.into(),
+            }],
+            follow_up: vec![],
+        });
+    }
+
+    list.push(Software {
+        name: "Neovim",
+        description: "nvim — modal terminal editor",
+        section: Section::Editors,
+        check: "nvim --version | head -1".into(),
+        install: vec![Step {
+            title: "Install Neovim",
+            cmd: pkg_install(p, "neovim", "neovim", "nvim"),
+        }],
+        follow_up: vec![],
+    });
+
+    list.push(Software {
+        name: "Helix",
+        description: "hx — modern modal terminal editor, batteries included",
+        section: Section::Editors,
+        check: "hx --version | head -1".into(),
+        install: vec![Step {
+            title: "Install Helix",
+            cmd: match p.pkg {
+                PkgManager::Brew => "command -v hx >/dev/null 2>&1 || brew install helix".into(),
+                PkgManager::Apt => r#"command -v hx >/dev/null 2>&1 || { sudo apt-get install -y software-properties-common && sudo add-apt-repository -y ppa:maveonair/helix-editor && sudo apt-get update -y && sudo apt-get install -y helix; }"#.into(),
+            },
+        }],
+        follow_up: vec![],
+    });
+
+    list.push(Software {
+        name: "Zed",
+        description: "Zed — fast collaborative editor by the Atom team",
+        section: Section::Editors,
+        check: match p.pkg {
+            PkgManager::Brew => r#"test -d "/Applications/Zed.app" && echo "Zed installed" || zed --version | head -1"#.into(),
+            PkgManager::Apt => r#"export PATH="$HOME/.local/bin:$PATH"; zed --version | head -1"#.into(),
+        },
+        install: vec![Step {
+            title: "Install Zed",
+            cmd: match p.pkg {
+                PkgManager::Brew => r#"test -d "/Applications/Zed.app" || brew install --cask zed"#.into(),
+                PkgManager::Apt => script_install("zed", "https://zed.dev/install.sh"),
+            },
+        }],
+        follow_up: vec![],
+    });
 
     // =======================================================================
     // AI tools (optional, multi-select)
