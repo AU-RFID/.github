@@ -309,7 +309,6 @@
       "description": "OrbStack — Docker daemon + Kubernetes for macOS (replaces Docker Desktop)",
       "section": "required",
       "kind": "gui",
-      "preferred": true,
       "follow_up": [ "Open OrbStack once to start the Docker daemon" ],
       "macos": {
         "check": "test -d '/Applications/OrbStack.app' && echo installed",
