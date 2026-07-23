@@ -13,8 +13,14 @@ mod theme;
 use std::io::{self, BufRead, BufReader};
 use std::process::{Command, Stdio};
 use std::sync::mpsc::{self, Receiver, Sender};
+use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
+
+/// How long a dry-run install step pauses so its progress is visible.
+const DRY_RUN_STEP_PAUSE: Duration = Duration::from_millis(400);
+/// Per-item pause when revealing the dry-run scan top-to-bottom.
+const DRY_RUN_CHECK_PAUSE: Duration = Duration::from_millis(70);
 
 use crossterm::event::{self, Event, KeyCode, KeyEventKind};
 use crossterm::terminal::{
@@ -81,9 +87,11 @@ enum Msg {
     /// Scan result for item i: Some(version/detail) if installed.
     Check(usize, Option<String>),
     ScanDone,
-    StepStart,
+    /// Install step `usize` started.
+    StepStart(usize),
     Line(String),
-    StepDone(bool),
+    /// Install step `usize` finished; bool = success.
+    StepDone(usize, bool),
     InstallDone,
 }
 
@@ -94,9 +102,36 @@ enum ItemState {
     Missing,
 }
 
+#[derive(Clone, Copy)]
+enum StepState {
+    Pending,
+    Running,
+    Done,
+    Failed,
+}
+
+impl StepState {
+    fn symbol(self) -> &'static str {
+        match self {
+            StepState::Pending => "·",
+            StepState::Running => "…",
+            StepState::Done => "✓",
+            StepState::Failed => "✗",
+        }
+    }
+    fn style(self) -> Style {
+        match self {
+            StepState::Pending => theme::dim(),
+            StepState::Running => theme::title(),
+            StepState::Done => theme::good(),
+            StepState::Failed => theme::bad(),
+        }
+    }
+}
+
 struct StepStatus {
     title: String,
-    state: char, // '·' pending, '…' running, '✓' ok, '✗' failed
+    state: StepState,
 }
 
 struct App {
@@ -121,7 +156,6 @@ struct App {
     welcome_btn: usize, // 0 = Get Started, 1 = Exit
     scan_done: bool,
     steps: Vec<StepStatus>,
-    current_step: usize,
     log: Vec<String>,
     rx: Option<Receiver<Msg>>,
     follow_ups: Vec<String>,
@@ -158,7 +192,6 @@ impl App {
             welcome_btn: 0,
             scan_done: false,
             steps: Vec::new(),
-            current_step: 0,
             log: Vec::new(),
             rx: None,
             follow_ups: Vec::new(),
@@ -169,34 +202,30 @@ impl App {
         self.states = vec![ItemState::Checking; self.items.len()];
         self.selected = vec![false; self.items.len()];
         self.scan_done = false;
-        let checks: Vec<(String, Exec)> = (0..self.items.len())
-            .map(|i| (self.items[i].check.clone(), self.exec_for(i)))
-            .collect();
+        let jobs = self.check_jobs();
         let (tx, rx) = mpsc::channel();
         self.rx = Some(rx);
-        let dry_run = self.dry_run;
-        // Run every check on its own thread so a slow tool never blocks the
-        // others; results stream back as each finishes, then ScanDone.
-        thread::spawn(move || {
-            let mut handles = Vec::new();
-            for (i, (check, exec)) in checks.into_iter().enumerate() {
-                let tx = tx.clone();
-                handles.push(thread::spawn(move || {
-                    let result = if dry_run {
-                        // Preview a fresh machine: everything reads as missing.
-                        thread::sleep(Duration::from_millis(150 + (i as u64 % 6) * 60));
-                        None
-                    } else {
-                        run_check(&check, &exec)
-                    };
+
+        if self.dry_run {
+            // Preview a fresh machine: report everything missing, revealed
+            // top-to-bottom so the scan animation is visible.
+            thread::spawn(move || {
+                for (i, _, _) in jobs {
+                    thread::sleep(DRY_RUN_CHECK_PAUSE);
+                    let _ = tx.send(Msg::Check(i, None));
+                }
+                let _ = tx.send(Msg::ScanDone);
+            });
+        } else {
+            // Run checks across a bounded pool; results stream to the UI as
+            // each finishes, then ScanDone once the pool drains.
+            thread::spawn(move || {
+                for (i, result) in spawn_check_pool(jobs) {
                     let _ = tx.send(Msg::Check(i, result));
-                }));
-            }
-            for h in handles {
-                let _ = h.join();
-            }
-            let _ = tx.send(Msg::ScanDone);
-        });
+                }
+                let _ = tx.send(Msg::ScanDone);
+            });
+        }
         self.screen = Screen::Scan;
     }
 
@@ -208,17 +237,19 @@ impl App {
         self.steps.clear();
         self.follow_ups.clear();
         self.log.clear();
-        self.current_step = 0;
 
         let mut work: Vec<(String, String, Exec)> = Vec::new();
         for &i in &picked {
             let item = &self.items[i];
             for s in &item.install {
-                self.steps.push(StepStatus { title: s.title.to_string(), state: '·' });
-                work.push((s.title.to_string(), s.cmd.clone(), self.exec_for(i)));
+                self.steps.push(StepStatus {
+                    title: s.title.clone(),
+                    state: StepState::Pending,
+                });
+                work.push((s.title.clone(), s.cmd.clone(), self.exec_for(i)));
             }
             for f in &item.follow_up {
-                self.follow_ups.push((*f).to_string());
+                self.follow_ups.push(f.clone());
             }
         }
 
@@ -250,17 +281,16 @@ impl App {
                     self.rx = None;
                     return;
                 }
-                Msg::StepStart => {
-                    if let Some(s) = self.steps.get_mut(self.current_step) {
-                        s.state = '…';
+                Msg::StepStart(i) => {
+                    if let Some(s) = self.steps.get_mut(i) {
+                        s.state = StepState::Running;
                     }
                 }
                 Msg::Line(l) => self.log.push(l),
-                Msg::StepDone(ok) => {
-                    if let Some(s) = self.steps.get_mut(self.current_step) {
-                        s.state = if ok { '✓' } else { '✗' };
+                Msg::StepDone(i, ok) => {
+                    if let Some(s) = self.steps.get_mut(i) {
+                        s.state = if ok { StepState::Done } else { StepState::Failed };
                     }
-                    self.current_step += 1;
                 }
                 Msg::InstallDone => install_done = true,
             }
@@ -275,19 +305,9 @@ impl App {
                     }
                 }
             } else {
-                // Re-check everything (in parallel) so the summary shows the
-                // real post-install state.
-                let jobs: Vec<(String, Exec)> = (0..self.items.len())
-                    .map(|i| (self.items[i].check.clone(), self.exec_for(i)))
-                    .collect();
-                let results: Vec<Option<String>> = thread::scope(|s| {
-                    let handles: Vec<_> = jobs
-                        .iter()
-                        .map(|(c, e)| s.spawn(move || run_check(c, e)))
-                        .collect();
-                    handles.into_iter().map(|h| h.join().unwrap()).collect()
-                });
-                for (i, r) in results.into_iter().enumerate() {
+                // Re-check everything (same bounded pool) so the summary
+                // shows the real post-install state.
+                for (i, r) in spawn_check_pool(self.check_jobs()) {
                     self.states[i] = match r {
                         Some(d) => ItemState::Installed(d),
                         None => ItemState::Missing,
@@ -296,6 +316,14 @@ impl App {
             }
             self.screen = Screen::Summary;
         }
+    }
+
+    /// The (item index, check command, exec context) for every tool — the
+    /// input to a parallel check run.
+    fn check_jobs(&self) -> Vec<CheckJob> {
+        (0..self.items.len())
+            .map(|i| (i, self.items[i].check.clone(), self.exec_for(i)))
+            .collect()
     }
 
     /// Total number of selectable rows across every box.
@@ -383,11 +411,44 @@ fn run_check(check: &str, exec: &Exec) -> Option<String> {
     }
 }
 
+/// A single check to run: (item index, check command, exec context).
+type CheckJob = (usize, String, Exec);
+
+/// Spawn a pool of worker threads (bounded by the CPU count) that run `jobs`
+/// concurrently, so a slow tool never blocks the others without spawning an
+/// unbounded number of processes. Returns a receiver that yields
+/// (item index, result) as each check finishes and closes when all are done.
+/// Callers can stream from it (scan) or drain it to completion (re-check).
+fn spawn_check_pool(jobs: Vec<CheckJob>) -> Receiver<(usize, Option<String>)> {
+    let (tx, rx) = mpsc::channel();
+    if jobs.is_empty() {
+        return rx; // already closed — no workers hold a sender
+    }
+    let workers = thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(4)
+        .min(jobs.len());
+
+    let queue = Arc::new(Mutex::new(jobs.into_iter()));
+    for _ in 0..workers {
+        let queue = Arc::clone(&queue);
+        let tx = tx.clone();
+        thread::spawn(move || loop {
+            // Pop one job; release the lock before running the check.
+            let Some((i, check, exec)) = queue.lock().unwrap().next() else {
+                break;
+            };
+            let _ = tx.send((i, run_check(&check, &exec)));
+        });
+    }
+    rx
+}
+
 /// Runs install steps sequentially on a background thread, streaming output.
 /// In dry-run mode nothing is executed — each step's command is only printed.
 fn run_installer(work: Vec<(String, String, Exec)>, tx: Sender<Msg>, dry_run: bool) {
-    for (title, cmd, exec) in work {
-        let _ = tx.send(Msg::StepStart);
+    for (step, (title, cmd, exec)) in work.into_iter().enumerate() {
+        let _ = tx.send(Msg::StepStart(step));
         if dry_run {
             let where_note = match &exec {
                 Exec::Bash => String::new(),
@@ -396,8 +457,8 @@ fn run_installer(work: Vec<(String, String, Exec)>, tx: Sender<Msg>, dry_run: bo
             };
             let _ = tx.send(Msg::Line(format!("[dry-run] {title}{where_note} — would run:")));
             let _ = tx.send(Msg::Line(format!("  $ {cmd}")));
-            thread::sleep(Duration::from_millis(400)); // let the UI show progress
-            let _ = tx.send(Msg::StepDone(true));
+            thread::sleep(DRY_RUN_STEP_PAUSE); // let the UI show progress
+            let _ = tx.send(Msg::StepDone(step, true));
             continue;
         }
         let ok = match build_command(&exec, &cmd)
@@ -426,7 +487,7 @@ fn run_installer(work: Vec<(String, String, Exec)>, tx: Sender<Msg>, dry_run: bo
                 false
             }
         };
-        let _ = tx.send(Msg::StepDone(ok));
+        let _ = tx.send(Msg::StepDone(step, ok));
     }
     let _ = tx.send(Msg::InstallDone);
 }
@@ -862,13 +923,7 @@ fn draw_install(f: &mut Frame, app: &App) {
         .steps
         .iter()
         .map(|s| {
-            let style = match s.state {
-                '✓' => theme::good(),
-                '✗' => theme::bad(),
-                '…' => theme::title(),
-                _ => theme::dim(),
-            };
-            ListItem::new(format!("{} {}", s.state, s.title)).style(style)
+            ListItem::new(format!("{} {}", s.state.symbol(), s.title)).style(s.state.style())
         })
         .collect();
     f.render_widget(
