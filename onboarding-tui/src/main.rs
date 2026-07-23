@@ -103,8 +103,9 @@ struct App {
     dry_run: bool,
     platform: Platform,
     items: Vec<Software>,
-    /// Item indices per box, in display order (Editors, AI Tools, Required).
+    /// Item indices per box, in display order (Editors, Containers, AI, Required).
     order_editors: Vec<usize>,
+    order_containers: Vec<usize>,
     order_ai: Vec<usize>,
     order_req: Vec<usize>,
     /// Cursor position over the combined display order across all boxes.
@@ -138,6 +139,7 @@ impl App {
             (0..n).filter(|&i| items[i].section == s).collect()
         };
         let order_editors = by_section(Section::Editors);
+        let order_containers = by_section(Section::Containers);
         let order_ai = by_section(Section::Ai);
         let order_req = by_section(Section::Required);
 
@@ -146,6 +148,7 @@ impl App {
             platform,
             items,
             order_editors,
+            order_containers,
             order_ai,
             order_req,
             cursor: 0,
@@ -279,19 +282,30 @@ impl App {
         }
     }
 
-    /// Move the Scan-screen cursor across all boxes (Editors → AI → Required).
+    /// Item-index boxes in display order — the single place that defines the
+    /// scan screen's box sequence.
+    fn box_orders(&self) -> [&Vec<usize>; 4] {
+        [
+            &self.order_editors,
+            &self.order_containers,
+            &self.order_ai,
+            &self.order_req,
+        ]
+    }
+
+    /// Move the Scan-screen cursor across all boxes.
     fn move_row(&mut self, delta: i32) {
-        let len = (self.order_editors.len() + self.order_ai.len() + self.order_req.len()) as i32;
+        let len: usize = self.box_orders().iter().map(|o| o.len()).sum();
         if len == 0 {
             return;
         }
-        self.cursor = (self.cursor as i32 + delta).rem_euclid(len) as usize;
+        self.cursor = (self.cursor as i32 + delta).rem_euclid(len as i32) as usize;
     }
 
     /// The software item under the Scan-screen cursor.
     fn cursor_item(&self) -> Option<usize> {
         let mut c = self.cursor;
-        for order in [&self.order_editors, &self.order_ai, &self.order_req] {
+        for order in self.box_orders() {
             if c < order.len() {
                 return order.get(c).copied();
             }
@@ -717,29 +731,29 @@ fn scan_box(f: &mut Frame, app: &App, area: Rect, title: &str, order: &[usize], 
 fn draw_scan(f: &mut Frame, app: &mut App) {
     let (body, footer) = chrome(f, app, "What you have vs. what we use");
 
-    let [ed_area, ai_area, req_area, detail_area] = Layout::vertical([
-        Constraint::Length(app.order_editors.len() as u16 + 2),
-        Constraint::Length(app.order_ai.len() as u16 + 2),
-        Constraint::Length(app.order_req.len() as u16 + 2),
-        Constraint::Length(4),
-    ])
-    .areas(body);
+    // One box per section, each sized to its contents; About pane at the end.
+    let boxes: [(&str, &Vec<usize>); 4] = [
+        (Section::Editors.title(), &app.order_editors),
+        (Section::Containers.title(), &app.order_containers),
+        (Section::Ai.title(), &app.order_ai),
+        (Section::Required.title(), &app.order_req),
+    ];
+    let mut constraints: Vec<Constraint> =
+        boxes.iter().map(|(_, o)| Constraint::Length(o.len() as u16 + 2)).collect();
+    constraints.push(Constraint::Length(4)); // About pane
+    let areas = Layout::vertical(constraints).split(body);
 
     // One cursor spans the boxes; give each box its local offset (or None).
-    let boxes = [
-        (ed_area, Section::Editors.title(), &app.order_editors),
-        (ai_area, Section::Ai.title(), &app.order_ai),
-        (req_area, Section::Required.title(), &app.order_req),
-    ];
     let mut rem = Some(app.cursor);
-    for (area, title, order) in boxes {
+    for (idx, (title, order)) in boxes.iter().enumerate() {
         let local = rem.filter(|c| *c < order.len());
-        scan_box(f, app, area, title, order, local);
+        scan_box(f, app, areas[idx], title, order, local);
         rem = match rem {
             Some(c) if c >= order.len() => Some(c - order.len()),
             _ => None, // cursor was in this box; no later box highlights
         };
     }
+    let detail_area = areas[boxes.len()];
 
     // Description of the highlighted item.
     let desc = app

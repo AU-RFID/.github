@@ -27,6 +27,7 @@ use crate::detect::{Platform, PkgManager};
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Section {
     Editors,
+    Containers,
     Ai,
     Required,
 }
@@ -35,6 +36,7 @@ impl Section {
     pub fn title(&self) -> &'static str {
         match self {
             Section::Editors => " Code Editors — pick at least one ",
+            Section::Containers => " Docker / Kubernetes — optional ",
             Section::Ai => " AI Tools — optional ",
             Section::Required => " Required ",
         }
@@ -98,6 +100,22 @@ fn pkg_install(p: &Platform, brew: &str, apt: &str, probe: &str) -> String {
 fn script_install(probe: &str, url: &str) -> String {
     format!(
         "command -v {probe} >/dev/null 2>&1 || {{ curl -fsSL {url} -o /tmp/{probe}-install.sh && bash /tmp/{probe}-install.sh; }}"
+    )
+}
+
+/// Linux arch string used by most GitHub release assets.
+fn linux_arch(p: &Platform) -> &'static str {
+    match p.arch {
+        "aarch64" => "arm64",
+        _ => "amd64",
+    }
+}
+
+/// Install a single static binary from a GitHub `latest/download` tarball that
+/// contains a file named `probe` (if `probe` is missing).
+fn github_bin_install(probe: &str, repo: &str, asset: &str) -> String {
+    format!(
+        "command -v {probe} >/dev/null 2>&1 || {{ curl -fsSL https://github.com/{repo}/releases/latest/download/{asset} -o /tmp/{probe}.tgz && tar -xzf /tmp/{probe}.tgz -C /tmp {probe} && sudo install /tmp/{probe} /usr/local/bin/{probe}; }}"
     )
 }
 
@@ -219,6 +237,68 @@ pub fn registry(p: &Platform) -> Vec<Software> {
     });
 
     // =======================================================================
+    // Docker / Kubernetes (optional, multi-select — GUIs and TUIs)
+    //
+    // OrbStack (which bundles the Docker daemon) is required on macOS and
+    // lives in the Required section below.
+    // =======================================================================
+
+    // k9s — Kubernetes TUI (cross-platform).
+    list.push(Software {
+        name: "k9s",
+        description: "k9s — terminal UI for Kubernetes clusters",
+        section: Section::Containers,
+        preferred: true,
+        check: "k9s version 2>/dev/null | head -1".into(),
+        install: vec![Step {
+            title: "Install k9s",
+            cmd: match p.pkg {
+                PkgManager::Brew => "command -v k9s >/dev/null 2>&1 || brew install k9s".into(),
+                PkgManager::Apt => {
+                    github_bin_install("k9s", "derailed/k9s", &format!("k9s_Linux_{}.tar.gz", linux_arch(p)))
+                }
+            },
+        }],
+        ..Software::default()
+    });
+
+    // lazydocker — Docker TUI (cross-platform).
+    list.push(Software {
+        name: "lazydocker",
+        description: "lazydocker — terminal UI for Docker and docker-compose",
+        section: Section::Containers,
+        check: r#"export PATH="$HOME/.local/bin:$PATH"; lazydocker --version | head -1"#.into(),
+        install: vec![Step {
+            title: "Install lazydocker",
+            cmd: match p.pkg {
+                PkgManager::Brew => "command -v lazydocker >/dev/null 2>&1 || brew install lazydocker".into(),
+                PkgManager::Apt => script_install(
+                    "lazydocker",
+                    "https://raw.githubusercontent.com/jesseduffield/lazydocker/master/scripts/install_update_linux.sh",
+                ),
+            },
+        }],
+        ..Software::default()
+    });
+
+    // Lens — Kubernetes GUI (macOS + Windows host; GUI app).
+    if p.pkg == PkgManager::Brew || windows_host {
+        list.push(Software {
+            name: "Lens",
+            description: "Lens Desktop — GUI for managing Kubernetes clusters",
+            section: Section::Containers,
+            location: Location::Host,
+            winget_id: Some("Mirantis.Lens"),
+            check: r#"test -d "/Applications/Lens.app" && echo "Lens installed""#.into(),
+            install: vec![Step {
+                title: "Install Lens",
+                cmd: r#"test -d "/Applications/Lens.app" || brew install --cask lens"#.into(),
+            }],
+            ..Software::default()
+        });
+    }
+
+    // =======================================================================
     // AI tools (optional, multi-select)
     // =======================================================================
 
@@ -295,6 +375,23 @@ pub fn registry(p: &Platform) -> Vec<Software> {
                 cmd: r#"command -v brew >/dev/null 2>&1 || { curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh -o /tmp/brew-install.sh && NONINTERACTIVE=1 /bin/bash /tmp/brew-install.sh; }"#.into(),
             }],
             follow_up: vec![r#"eval "$(/opt/homebrew/bin/brew shellenv)"   # then reopen your terminal"#],
+            ..Software::default()
+        });
+    }
+
+    // -- OrbStack (macOS only; bundles the Docker daemon + Kubernetes) ------
+    if p.pkg == PkgManager::Brew && !windows_host {
+        list.push(Software {
+            name: "OrbStack",
+            description: "OrbStack — Docker daemon + Kubernetes for macOS (replaces Docker Desktop)",
+            preferred: true,
+            location: Location::Host,
+            check: r#"test -d "/Applications/OrbStack.app" && echo "OrbStack installed""#.into(),
+            install: vec![Step {
+                title: "Install OrbStack",
+                cmd: r#"test -d "/Applications/OrbStack.app" || brew install --cask orbstack"#.into(),
+            }],
+            follow_up: vec!["Open OrbStack once to start the Docker daemon"],
             ..Software::default()
         });
     }
