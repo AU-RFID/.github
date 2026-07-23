@@ -262,6 +262,24 @@ pub fn registry(p: &Platform) -> Vec<Software> {
         ..Software::default()
     });
 
+    // d4s — Docker TUI (github.com/jr-k/d4s).
+    list.push(Software {
+        name: "d4s",
+        description: "d4s — feature-rich terminal UI for Docker",
+        section: Section::Containers,
+        preferred: true,
+        check: r#"export PATH="$HOME/.local/bin:$PATH"; d4s --version | head -1"#.into(),
+        install: vec![Step {
+            title: "Install d4s",
+            cmd: match p.pkg {
+                PkgManager::Brew => "command -v d4s >/dev/null 2>&1 || brew install jr-k/d4s/d4s".into(),
+                // Official installer drops the binary into ~/.local/bin.
+                PkgManager::Apt => r#"export PATH="$HOME/.local/bin:$PATH"; command -v d4s >/dev/null 2>&1 || { curl -fsSL https://d4scli.io/install.sh -o /tmp/d4s-install.sh && sh /tmp/d4s-install.sh "$HOME/.local/bin"; }"#.into(),
+            },
+        }],
+        ..Software::default()
+    });
+
     // lazydocker — Docker TUI (cross-platform).
     list.push(Software {
         name: "lazydocker",
