@@ -718,7 +718,7 @@ fn draw(f: &mut Frame, app: &mut App) {
 }
 
 fn draw_distro(f: &mut Frame, app: &App) {
-    let (body, footer) = chrome(f, app, "Choose a WSL distro");
+    let (body, footer) = chrome(f, app);
 
     if app.distros.is_empty() {
         f.render_widget(
@@ -846,8 +846,14 @@ fn frame_area(full: Rect) -> Rect {
     Rect { x, y, width: w, height: h }
 }
 
-/// Standard header/body/footer chrome for the non-welcome screens.
-fn chrome(f: &mut Frame, app: &App, screen_title: &str) -> (Rect, Rect) {
+/// Total onboarding steps. Tool installation is step 1 of the flow; more steps
+/// (SSH keys, cloning repos, …) may be added later, so the header shows "1/N".
+const ONBOARDING_STEP: usize = 1;
+const ONBOARDING_STEPS: usize = 1;
+
+/// Standard header/body/footer chrome for the non-welcome screens. The title
+/// bar is centered and reads "Tool Installation  <step>/<total>".
+fn chrome(f: &mut Frame, app: &App) -> (Rect, Rect) {
     let [header, body, footer] = Layout::vertical([
         Constraint::Length(3),
         Constraint::Min(5),
@@ -855,10 +861,11 @@ fn chrome(f: &mut Frame, app: &App, screen_title: &str) -> (Rect, Rect) {
     ])
     .areas(frame_area(f.area()));
 
-    let dry = if app.dry_run { "  [DRY RUN — nothing will be installed]" } else { "" };
+    let dry = if app.dry_run { "   ·   DRY RUN — nothing will be installed" } else { "" };
     f.render_widget(
-        Paragraph::new(format!(" RFID Lab Onboarding · {screen_title} — {}{dry}", app.platform.label()))
+        Paragraph::new(format!("Tool Installation  {ONBOARDING_STEP}/{ONBOARDING_STEPS}{dry}"))
             .style(theme::title())
+            .centered()
             .block(Block::default().borders(Borders::ALL).border_style(theme::border())),
         header,
     );
@@ -942,7 +949,7 @@ fn render_collapsed_box(f: &mut Frame, app: &App, area: Rect, sec: usize, count:
 }
 
 fn draw_scan(f: &mut Frame, app: &mut App) {
-    let (body, footer) = chrome(f, app, "What you have vs. what we use");
+    let (body, footer) = chrome(f, app);
 
     // Split: boxes region on top, fixed About pane at the bottom.
     let [boxes_area, detail_area] =
@@ -1068,7 +1075,7 @@ fn draw_scan(f: &mut Frame, app: &mut App) {
 }
 
 fn draw_install(f: &mut Frame, app: &App) {
-    let (body, footer) = chrome(f, app, "Installing");
+    let (body, footer) = chrome(f, app);
 
     let [left, right] =
         Layout::horizontal([Constraint::Percentage(40), Constraint::Percentage(60)]).areas(body);
@@ -1107,7 +1114,7 @@ fn draw_install(f: &mut Frame, app: &App) {
 }
 
 fn draw_summary(f: &mut Frame, app: &App) {
-    let (body, footer) = chrome(f, app, "Summary");
+    let (body, footer) = chrome(f, app);
 
     let mut lines: Vec<Line> = app
         .items
