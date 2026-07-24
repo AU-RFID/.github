@@ -137,12 +137,13 @@ struct StepStatus {
     state: StepState,
 }
 
-/// A navigable row on the scan screen: a collapsed section's header, or a
-/// software item.
-#[derive(Clone, Copy)]
+/// A navigable row on the scan screen: a collapsed section's header, a
+/// software item, or the Confirm button pinned at the very bottom.
+#[derive(Clone, Copy, PartialEq)]
 enum Nav {
     Header(usize), // section index
     Item(usize),   // item index
+    Confirm,       // the install button, last row (only once the scan is done)
 }
 
 struct App {
@@ -356,6 +357,11 @@ impl App {
                 rows.extend(order.iter().map(|&i| Nav::Item(i)));
             }
         }
+        // The Confirm button lives at the very bottom, so the user has to move
+        // past every section before they can install.
+        if self.scan_done {
+            rows.push(Nav::Confirm);
+        }
         rows
     }
 
@@ -377,8 +383,13 @@ impl App {
     fn cursor_item(&self) -> Option<usize> {
         match self.cursor_nav()? {
             Nav::Item(i) => Some(i),
-            Nav::Header(_) => None,
+            Nav::Header(_) | Nav::Confirm => None,
         }
+    }
+
+    /// Whether the cursor is on the Confirm button.
+    fn cursor_on_confirm(&self) -> bool {
+        self.cursor_nav() == Some(Nav::Confirm)
     }
 
     /// Expand/collapse the section under the cursor, keeping the cursor on that
@@ -394,19 +405,20 @@ impl App {
             .position(|r| match r {
                 Nav::Header(s) => *s == sec,
                 Nav::Item(i) => self.items[*i].section == sec,
+                Nav::Confirm => false,
             })
             .unwrap_or(0);
     }
 
     /// Toggle the collapse state of the section under the cursor, if collapsible.
     fn toggle_collapse_at_cursor(&mut self) {
-        if let Some(sec) = self.cursor_nav().map(|n| match n {
-            Nav::Header(s) => s,
-            Nav::Item(i) => self.items[i].section,
-        }) {
-            if self.sections[sec].collapsible {
-                self.set_collapsed(sec, !self.collapsed[sec]);
-            }
+        let sec = match self.cursor_nav() {
+            Some(Nav::Header(s)) => s,
+            Some(Nav::Item(i)) => self.items[i].section,
+            _ => return,
+        };
+        if self.sections[sec].collapsible {
+            self.set_collapsed(sec, !self.collapsed[sec]);
         }
     }
 
@@ -682,11 +694,16 @@ fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, dry_run: bool)
                     }
                 }
                 KeyCode::Enter if app.scan_done => {
-                    match app.unsatisfied_pick_one() {
-                        None => app.start_install(),
-                        Some(title) => {
-                            app.notice = Some(format!("Pick at least one from:{title}"));
+                    if app.cursor_on_confirm() {
+                        match app.unsatisfied_pick_one() {
+                            None => app.start_install(),
+                            Some(title) => {
+                                app.notice = Some(format!("Pick at least one from:{title}"));
+                            }
                         }
+                    } else {
+                        app.notice =
+                            Some("Scroll down to the Confirm button to install".to_string());
                     }
                 }
                 _ => {}
@@ -965,24 +982,34 @@ fn draw_scan(f: &mut Frame, app: &mut App) {
     let [boxes_area, scrollbar_col] =
         Layout::horizontal([Constraint::Min(1), Constraint::Length(1)]).areas(boxes_area);
 
+    // Slots to lay out: one per section box, plus a trailing Confirm button
+    // box once the scan is done (so it sits below the whole list).
+    let has_confirm = app.scan_done;
+    let confirm_slot = app.boxes.len(); // valid slot index only when has_confirm
+    let n_slots = app.boxes.len() + has_confirm as usize;
+
     // A collapsed box is one line tall (plus borders); otherwise it sizes to
-    // its items.
-    let heights: Vec<u16> = app
+    // its items. The Confirm button box is a fixed 3 rows.
+    let mut heights: Vec<u16> = app
         .boxes
         .iter()
         .map(|(sec, o)| if app.collapsed[*sec] { 3 } else { o.len() as u16 + 2 })
         .collect();
+    if has_confirm {
+        heights.push(3);
+    }
 
-    // Locate the cursor: which section it's in (→ which box) and, if on an
-    // item, that item's index.
+    // Locate the cursor's slot: which box it's in, or the Confirm slot.
     let cur = app.cursor_nav();
-    let cur_section = cur.map(|n| match n {
-        Nav::Header(s) => s,
-        Nav::Item(i) => app.items[i].section,
-    });
-    let cur_box = cur_section
-        .and_then(|cs| app.boxes.iter().position(|(s, _)| *s == cs))
-        .unwrap_or(0);
+    let cur_box = match cur {
+        Some(Nav::Confirm) => confirm_slot,
+        Some(Nav::Header(s)) => app.boxes.iter().position(|(x, _)| *x == s).unwrap_or(0),
+        Some(Nav::Item(i)) => {
+            let s = app.items[i].section;
+            app.boxes.iter().position(|(x, _)| *x == s).unwrap_or(0)
+        }
+        None => 0,
+    };
 
     // Scroll by whole boxes so the cursor's box is always fully visible.
     let avail = boxes_area.height;
@@ -1012,8 +1039,15 @@ fn draw_scan(f: &mut Frame, app: &mut App) {
     let areas = Layout::vertical(constraints).split(boxes_area);
 
     for (slot, j) in (start..=end).enumerate() {
+        let area = areas[slot];
+        if has_confirm && j == confirm_slot {
+            let n = app.selected.iter().filter(|s| **s).count();
+            let label = format!("  Confirm — install {n} selected  ");
+            button(f, area, &label, matches!(cur, Some(Nav::Confirm)));
+            continue;
+        }
         let (sec, order) = &app.boxes[j];
-        let (sec, area) = (*sec, areas[slot]);
+        let (sec, order) = (*sec, order);
         if app.collapsed[sec] {
             let selected = matches!(cur, Some(Nav::Header(s)) if s == sec);
             render_collapsed_box(f, app, area, sec, order.len(), selected);
@@ -1029,11 +1063,11 @@ fn draw_scan(f: &mut Frame, app: &mut App) {
     }
 
     // Scrollbar in the gutter — the standard cue for "more above/below". Shown
-    // only when the boxes don't all fit; the ▲/▼ end-caps and thumb position
+    // only when the slots don't all fit; the ▲/▼ end-caps and thumb position
     // tell the user which way there's more.
     let visible = end - start + 1;
-    if visible < app.boxes.len() {
-        let mut sb_state = ScrollbarState::new(app.boxes.len())
+    if visible < n_slots {
+        let mut sb_state = ScrollbarState::new(n_slots)
             .position(start)
             .viewport_content_length(visible);
         let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight)
@@ -1050,6 +1084,7 @@ fn draw_scan(f: &mut Frame, app: &mut App) {
     let desc = match cur {
         Some(Nav::Item(i)) => app.items[i].description.clone(),
         Some(Nav::Header(_)) => "Optional tooling — expand to see what's inside.".to_string(),
+        Some(Nav::Confirm) => "Review your selections above, then press enter to install.".to_string(),
         None => String::new(),
     };
     f.render_widget(
@@ -1068,12 +1103,16 @@ fn draw_scan(f: &mut Frame, app: &mut App) {
     } else if app.scan_done {
         let n = app.selected.iter().filter(|s| **s).count();
         let hint_text = match cur {
-            Some(Nav::Header(_)) => {
-                format!(" ↑/↓ move · →/space expand · enter install {n} selected · r rescan · q quit")
+            Some(Nav::Confirm) => {
+                format!(" ↑/↓ move · enter install {n} selected · r rescan · q quit")
             }
-            _ => format!(
-                " ↑/↓ move · space toggle · ←/→ collapse/expand · enter install {n} selected · r rescan · q quit"
-            ),
+            Some(Nav::Header(_)) => {
+                " ↑/↓ move · →/space expand · ↓ to Confirm · r rescan · q quit".to_string()
+            }
+            _ => {
+                " ↑/↓ move · space toggle · ←/→ collapse/expand · ↓ to Confirm · r rescan · q quit"
+                    .to_string()
+            }
         };
         hint(f, footer, &hint_text);
     } else {
