@@ -824,12 +824,13 @@ fn draw_welcome(f: &mut Frame, app: &App) {
 }
 
 fn button(f: &mut Frame, area: Rect, label: &str, active: bool) {
-    let (block_style, text_style) = if active {
-        (theme::border(), theme::highlight())
+    let block = Block::default().borders(Borders::ALL);
+    let (block, text_style) = if active {
+        // Solid orange fill — the whole button is the accent, no gray outline.
+        (block.border_style(theme::accent()).style(theme::highlight()), theme::highlight())
     } else {
-        (theme::dim(), theme::dim())
+        (block.border_style(theme::border()), theme::dim())
     };
-    let block = Block::default().borders(Borders::ALL).border_style(block_style);
     f.render_widget(Paragraph::new(label).style(text_style).centered().block(block), area);
 }
 
