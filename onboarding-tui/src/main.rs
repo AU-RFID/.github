@@ -29,7 +29,10 @@ use crossterm::terminal::{
 use crossterm::ExecutableCommand;
 use ratatui::layout::Flex;
 use ratatui::prelude::*;
-use ratatui::widgets::{Block, Borders, List, ListItem, ListState, Paragraph, Wrap};
+use ratatui::widgets::{
+    Block, Borders, List, ListItem, ListState, Paragraph, Scrollbar, ScrollbarOrientation,
+    ScrollbarState, Wrap,
+};
 
 use detect::{detect, Platform};
 use software::{load, Location, Rule, SectionDef, Software};
@@ -944,6 +947,10 @@ fn draw_scan(f: &mut Frame, app: &mut App) {
     // Split: boxes region on top, fixed About pane at the bottom.
     let [boxes_area, detail_area] =
         Layout::vertical([Constraint::Min(3), Constraint::Length(4)]).areas(body);
+    // Reserve a 1-col gutter on the right for the scrollbar (stable width
+    // whether or not it's showing).
+    let [boxes_area, scrollbar_col] =
+        Layout::horizontal([Constraint::Min(1), Constraint::Length(1)]).areas(boxes_area);
 
     // A collapsed box is one line tall (plus borders); otherwise it sizes to
     // its items.
@@ -1008,6 +1015,24 @@ fn draw_scan(f: &mut Frame, app: &mut App) {
         }
     }
 
+    // Scrollbar in the gutter — the standard cue for "more above/below". Shown
+    // only when the boxes don't all fit; the ▲/▼ end-caps and thumb position
+    // tell the user which way there's more.
+    let visible = end - start + 1;
+    if visible < app.boxes.len() {
+        let mut sb_state = ScrollbarState::new(app.boxes.len())
+            .position(start)
+            .viewport_content_length(visible);
+        let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight)
+            .begin_symbol(Some("▲"))
+            .end_symbol(Some("▼"))
+            .track_symbol(Some("│"))
+            .thumb_symbol("█")
+            .style(theme::dim())
+            .thumb_style(theme::border());
+        f.render_stateful_widget(scrollbar, scrollbar_col, &mut sb_state);
+    }
+
     // About pane: item description, or a hint on a collapsed header.
     let desc = match cur {
         Some(Nav::Item(i)) => app.items[i].description.clone(),
@@ -1024,21 +1049,16 @@ fn draw_scan(f: &mut Frame, app: &mut App) {
         detail_area,
     );
 
-    let scroll = {
-        let up = if start > 0 { "▲" } else { " " };
-        let down = if end + 1 < app.boxes.len() { "▼" } else { " " };
-        format!("{up}{down}")
-    };
     if let Some(notice) = &app.notice {
         f.render_widget(Paragraph::new(format!(" ⚠ {notice}")).style(theme::bad()), footer);
     } else if app.scan_done {
         let n = app.selected.iter().filter(|s| **s).count();
         let hint_text = match cur {
             Some(Nav::Header(_)) => {
-                format!("{scroll} →/space expand · enter install {n} selected · r rescan · q quit")
+                format!(" ↑/↓ move · →/space expand · enter install {n} selected · r rescan · q quit")
             }
             _ => format!(
-                "{scroll} space toggle · ←/→ collapse/expand · enter install {n} selected · r rescan · q quit"
+                " ↑/↓ move · space toggle · ←/→ collapse/expand · enter install {n} selected · r rescan · q quit"
             ),
         };
         hint(f, footer, &hint_text);
