@@ -22,8 +22,8 @@
     { "id": "git",        "title": " Git Tools — optional ",              "rule": "optional" },
     { "id": "password",   "title": " Password Managers — optional ",      "rule": "optional" },
     { "id": "ai",         "title": " AI Tools — optional ",               "rule": "optional" },
-    { "id": "required",   "title": " Required ",                          "rule": "required", "collapsed": true },
-    { "id": "kubernetes", "title": " Kubernetes — optional ",            "rule": "optional", "collapsed": true }
+    { "id": "kubernetes", "title": " Kubernetes — optional ",            "rule": "optional" },
+    { "id": "required",   "title": " Required ",                          "rule": "required", "collapsed": true }
   ],
 
   "software": [

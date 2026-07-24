@@ -780,7 +780,9 @@ fn draw_welcome(f: &mut Frame, app: &App) {
     f.render_widget(Paragraph::new(logo_lines).centered(), rows[0]);
 
     f.render_widget(
-        Paragraph::new(UNIVERSITY).style(theme::navy()).centered(),
+        Paragraph::new(UNIVERSITY)
+            .style(Style::new().fg(theme::GRAY).add_modifier(Modifier::BOLD))
+            .centered(),
         rows[2],
     );
 

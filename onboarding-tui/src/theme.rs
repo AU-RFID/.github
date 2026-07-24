@@ -1,34 +1,38 @@
-//! Auburn University brand colors and shared styles.
-//! Per the lab's color directory — Auburn Orange #E86100, Auburn Blue #0B2341.
+//! TUI theme. Auburn Orange (#E86100) is the single accent color; everything
+//! else is neutral gray for secondary text plus green/red for status.
+//!
+//! Auburn navy was dropped on purpose: at #0B2341 it renders as near-black in a
+//! terminal and just read as muddy, so it added no signal.
 
 use ratatui::style::{Color, Modifier, Style};
 
+/// The one accent color.
 pub const ORANGE: Color = Color::Rgb(0xE8, 0x61, 0x00);
-pub const NAVY: Color = Color::Rgb(0x0B, 0x23, 0x41);
-
-pub fn navy() -> Style {
-    Style::new().fg(NAVY).add_modifier(Modifier::BOLD)
-}
-/// Lighter navy-tinted gray for secondary text (pure navy is unreadable on dark terminals).
-pub const SLATE: Color = Color::Rgb(0x8A, 0x9B, 0xB0);
+/// Neutral gray for secondary / dim text (no blue tint).
+pub const GRAY: Color = Color::Rgb(0x9E, 0x9E, 0x9E);
+/// Status colors.
 pub const GOOD: Color = Color::Rgb(0x4C, 0xAF, 0x50);
 pub const BAD: Color = Color::Rgb(0xE5, 0x53, 0x4B);
 
+/// Titles and headings — the accent.
 pub fn title() -> Style {
     Style::new().fg(ORANGE).add_modifier(Modifier::BOLD)
 }
 
+/// Box borders — the accent, unbolded.
 pub fn border() -> Style {
     Style::new().fg(ORANGE)
 }
 
+/// Secondary / helper text.
 pub fn dim() -> Style {
-    Style::new().fg(SLATE)
+    Style::new().fg(GRAY)
 }
 
-/// Highlighted/selected element: navy text on an orange block.
+/// Selected element: bold black text on an orange block (max contrast, works on
+/// both light and dark terminals).
 pub fn highlight() -> Style {
-    Style::new().fg(NAVY).bg(ORANGE).add_modifier(Modifier::BOLD)
+    Style::new().fg(Color::Black).bg(ORANGE).add_modifier(Modifier::BOLD)
 }
 
 pub fn good() -> Style {

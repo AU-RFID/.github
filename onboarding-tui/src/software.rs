@@ -242,16 +242,13 @@ mod tests {
     #[test]
     fn kubernetes_section_is_collapsible_and_teams_required() {
         let (sections, items) = load(&platform(Env::Macos));
-        // The Required and Kubernetes sections are collapsible...
-        let collapsible: Vec<&str> = sections
-            .iter()
-            .filter(|s| s.collapsible)
-            .map(|s| s.title.trim())
-            .collect();
-        assert!(collapsible.iter().any(|t| t.contains("Kubernetes")));
-        assert!(collapsible.iter().any(|t| t.contains("Required")));
-        // ...and Kubernetes is the last section (bottom of the list).
-        assert!(sections.last().unwrap().title.contains("Kubernetes"));
+        // Required is the last section and is the collapsible one; Kubernetes
+        // sits just above it and is now expanded (not collapsible).
+        let required_idx = sections.len() - 1;
+        assert!(sections[required_idx].title.contains("Required"));
+        assert!(sections[required_idx].collapsible);
+        assert!(sections[required_idx - 1].title.contains("Kubernetes"));
+        assert!(!sections[required_idx - 1].collapsible);
         // Microsoft Teams and Tailscale are present and live in a Required section.
         for name in ["Microsoft Teams", "Tailscale"] {
             let sw = items.iter().find(|s| s.name == name).unwrap_or_else(|| panic!("{name} missing"));
