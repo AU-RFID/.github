@@ -986,17 +986,16 @@ fn draw_scan(f: &mut Frame, app: &mut App) {
     // box once the scan is done (so it sits below the whole list).
     let has_confirm = app.scan_done;
     let confirm_slot = app.boxes.len(); // valid slot index only when has_confirm
-    let n_slots = app.boxes.len() + has_confirm as usize;
 
     // A collapsed box is one line tall (plus borders); otherwise it sizes to
-    // its items. The Confirm button box is a fixed 3 rows.
+    // its items. The Confirm slot is 4 rows: a 1-row gap + a 3-row button.
     let mut heights: Vec<u16> = app
         .boxes
         .iter()
         .map(|(sec, o)| if app.collapsed[*sec] { 3 } else { o.len() as u16 + 2 })
         .collect();
     if has_confirm {
-        heights.push(3);
+        heights.push(4);
     }
 
     // Locate the cursor's slot: which box it's in, or the Confirm slot.
@@ -1042,8 +1041,15 @@ fn draw_scan(f: &mut Frame, app: &mut App) {
         let area = areas[slot];
         if has_confirm && j == confirm_slot {
             let n = app.selected.iter().filter(|s| **s).count();
-            let label = format!("  Confirm — install {n} selected  ");
-            button(f, area, &label, matches!(cur, Some(Nav::Confirm)));
+            let label = format!("Confirm — install {n} selected");
+            // A blank row separates it from the last section, and it's only
+            // half width + centered so it reads as a button, not a section box.
+            let [_gap, row] =
+                Layout::vertical([Constraint::Length(1), Constraint::Min(3)]).areas(area);
+            let [btn] = Layout::horizontal([Constraint::Percentage(50)])
+                .flex(Flex::Center)
+                .areas(row);
+            button(f, btn, &label, matches!(cur, Some(Nav::Confirm)));
             continue;
         }
         let (sec, order) = &app.boxes[j];
@@ -1062,17 +1068,20 @@ fn draw_scan(f: &mut Frame, app: &mut App) {
         }
     }
 
-    // Scrollbar in the gutter — the standard cue for "more above/below". Shown
-    // only when the slots don't all fit; the ▲/▼ end-caps and thumb position
-    // tell the user which way there's more.
-    let visible = end - start + 1;
-    if visible < n_slots {
-        let mut sb_state = ScrollbarState::new(n_slots)
-            .position(start)
-            .viewport_content_length(visible);
+    // Scrollbar in the gutter — the cue for "more above/below". Measured in
+    // rows (not slots) so the thumb tracks real content and hits the very
+    // bottom when the last slot is showing. No arrow caps, so the thumb can
+    // reach the physical top/bottom of the track.
+    let total_rows: usize = heights.iter().map(|&h| h as usize).sum();
+    let view_rows = boxes_area.height as usize;
+    if total_rows > view_rows {
+        let offset: usize = heights[..start].iter().map(|&h| h as usize).sum();
+        let mut sb_state = ScrollbarState::new(total_rows)
+            .position(offset)
+            .viewport_content_length(view_rows);
         let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight)
-            .begin_symbol(Some("▲"))
-            .end_symbol(Some("▼"))
+            .begin_symbol(None)
+            .end_symbol(None)
             .track_symbol(Some("│"))
             .thumb_symbol("█")
             .style(theme::dim())
