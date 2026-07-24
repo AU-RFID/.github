@@ -223,11 +223,11 @@ mod tests {
     fn linux_server_excludes_gui_apps() {
         let server = names(Env::LinuxServer);
         // GUI-only apps must not appear on a headless server...
-        for gui in ["VS Code", "Lens", "Yaak", "DBeaver", "Tower", "OrbStack"] {
+        for gui in ["VS Code", "Lens", "Yaak", "DBeaver", "Tower", "OrbStack", "1Password", "Dashlane"] {
             assert!(!server.contains(&gui.to_string()), "{gui} leaked onto server");
         }
         // ...but CLI/TUI tools must.
-        for cli in ["Neovim", "k9s", "lazygit", "Rust", "Node.js"] {
+        for cli in ["Neovim", "k9s", "lazygit", "Rust", "Node.js", "Tailscale"] {
             assert!(server.contains(&cli.to_string()), "{cli} missing on server");
         }
     }
@@ -246,9 +246,15 @@ mod tests {
         let collapsible: Vec<&SectionDef> = sections.iter().filter(|s| s.collapsible).collect();
         assert_eq!(collapsible.len(), 1);
         assert!(collapsible[0].title.contains("Kubernetes"));
-        // Microsoft Teams is present and lives in a Required section.
-        let teams = items.iter().find(|s| s.name == "Microsoft Teams").expect("Teams missing");
-        assert_eq!(sections[teams.section].rule, Rule::Required);
+        // Microsoft Teams and Tailscale are present and live in a Required section.
+        for name in ["Microsoft Teams", "Tailscale"] {
+            let sw = items.iter().find(|s| s.name == name).unwrap_or_else(|| panic!("{name} missing"));
+            assert_eq!(sections[sw.section].rule, Rule::Required, "{name} should be required");
+        }
+        // 1Password is preferred within the Password Managers section.
+        let onepw = items.iter().find(|s| s.name == "1Password").expect("1Password missing");
+        assert!(onepw.preferred);
+        assert!(sections[onepw.section].title.contains("Password Managers"));
     }
 
     #[test]
