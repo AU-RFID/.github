@@ -753,11 +753,12 @@ fn draw_distro(f: &mut Frame, app: &App) {
 }
 
 fn draw_welcome(f: &mut Frame, app: &App) {
+    let frame = frame_area(f.area());
     // Vertically center the whole block: logo + university + subtitle + buttons.
     let content_height = LOGO.len() as u16 + 8;
     let [area] = Layout::vertical([Constraint::Length(content_height)])
         .flex(Flex::Center)
-        .areas(f.area());
+        .areas(frame);
 
     let mut rows = Layout::vertical([
         Constraint::Length(LOGO.len() as u16), // logo
@@ -804,10 +805,10 @@ fn draw_welcome(f: &mut Frame, app: &App) {
     button(f, b1, "  Get Started  ", app.welcome_btn == 0);
     button(f, b2, "  Exit  ", app.welcome_btn == 1);
 
-    // Hint pinned near the bottom of the screen.
+    // Hint pinned near the bottom of the framed area.
     let [hint_row] = Layout::vertical([Constraint::Length(1)])
         .flex(Flex::End)
-        .areas(f.area());
+        .areas(frame);
     f.render_widget(
         Paragraph::new("←/→ switch · enter select · q quit")
             .style(theme::dim())
@@ -826,6 +827,22 @@ fn button(f: &mut Frame, area: Rect, label: &str, active: bool) {
     f.render_widget(Paragraph::new(label).style(text_style).centered().block(block), area);
 }
 
+/// A centered content frame. Terminals vary wildly in size — on a big window
+/// (e.g. a 1440p monitor) a full-width TUI leaves a lot of dead space on the
+/// right, so we cap the content to a comfortable size and center it with a
+/// margin on every side. On a small terminal it simply fills the space (minus
+/// a thin margin), so nothing is ever clipped.
+fn frame_area(full: Rect) -> Rect {
+    const MAX_W: u16 = 88;
+    const MAX_H: u16 = 38;
+    // Always leave a margin: 2 cols each side, 1 row top/bottom.
+    let w = full.width.saturating_sub(4).clamp(1, MAX_W);
+    let h = full.height.saturating_sub(2).clamp(1, MAX_H);
+    let x = full.x + full.width.saturating_sub(w) / 2;
+    let y = full.y + full.height.saturating_sub(h) / 2;
+    Rect { x, y, width: w, height: h }
+}
+
 /// Standard header/body/footer chrome for the non-welcome screens.
 fn chrome(f: &mut Frame, app: &App, screen_title: &str) -> (Rect, Rect) {
     let [header, body, footer] = Layout::vertical([
@@ -833,7 +850,7 @@ fn chrome(f: &mut Frame, app: &App, screen_title: &str) -> (Rect, Rect) {
         Constraint::Min(5),
         Constraint::Length(1),
     ])
-    .areas(f.area());
+    .areas(frame_area(f.area()));
 
     let dry = if app.dry_run { "  [DRY RUN — nothing will be installed]" } else { "" };
     f.render_widget(

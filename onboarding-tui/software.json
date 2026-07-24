@@ -17,13 +17,13 @@
   "sections": [
     { "id": "editors",    "title": " Code Editors — pick at least one ", "rule": "pick-one" },
     { "id": "docker",     "title": " Docker — optional ",                "rule": "optional" },
-    { "id": "kubernetes", "title": " Kubernetes — optional ",            "rule": "optional", "collapsed": true },
     { "id": "api",        "title": " API / HTTP Clients — pick at least one ", "rule": "pick-one" },
     { "id": "database",   "title": " Database Tools — pick at least one ",     "rule": "pick-one" },
     { "id": "git",        "title": " Git Tools — optional ",              "rule": "optional" },
     { "id": "password",   "title": " Password Managers — optional ",      "rule": "optional" },
     { "id": "ai",         "title": " AI Tools — optional ",               "rule": "optional" },
-    { "id": "required",   "title": " Required ",                          "rule": "required" }
+    { "id": "required",   "title": " Required ",                          "rule": "required", "collapsed": true },
+    { "id": "kubernetes", "title": " Kubernetes — optional ",            "rule": "optional", "collapsed": true }
   ],
 
   "software": [
