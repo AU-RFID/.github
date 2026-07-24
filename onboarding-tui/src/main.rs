@@ -744,7 +744,8 @@ fn draw_distro(f: &mut Frame, app: &App) {
             Block::default()
                 .borders(Borders::ALL)
                 .border_style(theme::border())
-                .title(" Dev tools will be installed inside this distro "),
+                .title(" Dev tools will be installed inside this distro ")
+                .title_style(theme::title()),
         )
         .highlight_style(theme::highlight())
         .highlight_symbol(" > ");
@@ -915,7 +916,8 @@ fn scan_box(f: &mut Frame, app: &App, area: Rect, title: &str, order: &[usize], 
             Block::default()
                 .borders(Borders::ALL)
                 .border_style(theme::border())
-                .title(title.to_string()),
+                .title(title.to_string())
+                .title_style(theme::title()),
         )
         .highlight_style(theme::highlight())
         .highlight_symbol(" > ");
@@ -941,7 +943,8 @@ fn render_collapsed_box(f: &mut Frame, app: &App, area: Rect, sec: usize, count:
     let block = Block::default()
         .borders(Borders::ALL)
         .border_style(theme::border())
-        .title(box_title(app, sec));
+        .title(box_title(app, sec))
+        .title_style(theme::title());
     let (text, style) = if selected {
         (format!(" > {count} tools — →/space to expand "), theme::highlight())
     } else {
@@ -1038,7 +1041,7 @@ fn draw_scan(f: &mut Frame, app: &mut App) {
             .track_symbol(Some("│"))
             .thumb_symbol("█")
             .style(theme::dim())
-            .thumb_style(theme::border());
+            .thumb_style(theme::accent());
         f.render_stateful_widget(scrollbar, scrollbar_col, &mut sb_state);
     }
 
@@ -1052,8 +1055,9 @@ fn draw_scan(f: &mut Frame, app: &mut App) {
         Paragraph::new(desc).style(theme::dim()).wrap(Wrap { trim: true }).block(
             Block::default()
                 .borders(Borders::ALL)
-                .border_style(theme::dim())
-                .title(" About "),
+                .border_style(theme::border())
+                .title(" About ")
+                .title_style(theme::title()),
         ),
         detail_area,
     );
@@ -1094,7 +1098,8 @@ fn draw_install(f: &mut Frame, app: &App) {
             Block::default()
                 .borders(Borders::ALL)
                 .border_style(theme::border())
-                .title(" Steps "),
+                .title(" Steps ")
+                .title_style(theme::title()),
         ),
         left,
     );
@@ -1107,7 +1112,8 @@ fn draw_install(f: &mut Frame, app: &App) {
             Block::default()
                 .borders(Borders::ALL)
                 .border_style(theme::border())
-                .title(" Output "),
+                .title(" Output ")
+                .title_style(theme::title()),
         ),
         right,
     );
@@ -1146,7 +1152,8 @@ fn draw_summary(f: &mut Frame, app: &App) {
             Block::default()
                 .borders(Borders::ALL)
                 .border_style(theme::border())
-                .title(" Results "),
+                .title(" Results ")
+                .title_style(theme::title()),
         ),
         body,
     );

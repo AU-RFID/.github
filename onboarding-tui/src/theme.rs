@@ -19,9 +19,14 @@ pub fn title() -> Style {
     Style::new().fg(ORANGE).add_modifier(Modifier::BOLD)
 }
 
-/// Box borders — the accent, unbolded.
-pub fn border() -> Style {
+/// The accent, unbolded — scrollbar thumb, active marks, etc.
+pub fn accent() -> Style {
     Style::new().fg(ORANGE)
+}
+
+/// Box borders — neutral gray so orange stays an accent, not the whole UI.
+pub fn border() -> Style {
+    Style::new().fg(GRAY)
 }
 
 /// Secondary / helper text.
