@@ -223,7 +223,7 @@ mod tests {
     fn linux_server_excludes_gui_apps() {
         let server = names(Env::LinuxServer);
         // GUI-only apps must not appear on a headless server...
-        for gui in ["VS Code", "Lens", "Yaak", "DBeaver", "Tower", "OrbStack", "1Password", "Dashlane"] {
+        for gui in ["VS Code", "Lens", "Yaak", "DBeaver", "Tower", "OrbStack", "1Password", "Bitwarden"] {
             assert!(!server.contains(&gui.to_string()), "{gui} leaked onto server");
         }
         // ...but CLI/TUI tools must.

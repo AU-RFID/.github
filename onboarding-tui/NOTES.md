@@ -38,18 +38,18 @@ Meilisearch/SpiceDB/Keycloak are cluster-side only. Lint/format is Biome
 ## Needs verification on real hosts
 
 - winget IDs / casks flagged as best-effort: **Yaak**, **Tower**, Lens,
-  MySQL Workbench, DataGrip, **1Password** (`AgileBits.1Password`) (confirm
-  with `winget search` / `brew info`).
+  MySQL Workbench, DataGrip, **1Password** (`AgileBits.1Password`),
+  **Bitwarden** (`Bitwarden.Bitwarden`, Linux via `snap`) (confirm with
+  `winget search` / `brew info`).
 - Several GUI apps are macOS+Windows only (no `linux` block yet): Cursor,
   Lens, Linear, Yaak, Bruno, the DB tools, Tower, GitHub Desktop. Add a
   `linux` block (apt repo / flatpak / script) to offer them on Linux desktop.
-- **Dashlane** retired its desktop app (browser-extension only since 2025), so
-  it can't be installed as an app or detected — its "install" just opens the
-  extension page, its check is `false` (always shows blank), and it has no
-  `winget_id`, so it does **not** appear on a Windows host. 1Password is the
-  fully-installable option and is marked preferred. Both are free for students
-  via the GitHub Student Developer Pack (1Password Dev Tools 1yr; Dashlane
-  Premium 6mo).
+- **Password Managers** section (optional): 1Password (preferred, free for
+  students via the GitHub Student pack) and Bitwarden (open-source, free tier).
+  Both are `kind: gui`, so on a **Windows host they install via winget on the
+  host, not inside WSL** — which is what we want for a password manager.
+  Dashlane was dropped: it retired its desktop app and is browser-extension
+  only, so it can't be installed or detected cleanly.
 - **Tailscale** (Required, `kind: cli`): macOS uses the `tailscale` cask; Linux
   uses the official `install.sh` (downloaded to /tmp first, per repo convention).
   On a Windows host it installs inside WSL — consider installing Tailscale on

@@ -286,22 +286,21 @@
       }
     },
     {
-      "name": "Dashlane",
-      "_note": "Dashlane retired its desktop app — it is browser-extension-only now, so it can't be installed as an app or auto-detected. Install just opens the extension page. Free 6mo Premium via the GitHub pack: https://www.dashlane.com/github-students",
-      "description": "Dashlane — password manager (browser extension only; free for students via the GitHub pack)",
+      "name": "Bitwarden",
+      "description": "Bitwarden — open-source password manager (free tier, self-hostable)",
       "section": "password",
       "kind": "gui",
+      "winget_id": "Bitwarden.Bitwarden",
       "follow_up": [
-        "Dashlane is a browser extension now — install it from the page that just opened",
-        "Claim the free student plan: https://www.dashlane.com/github-students"
+        "Optional CLI (`bw`) for scripts: brew install bitwarden-cli (macOS) / npm i -g @bitwarden/cli"
       ],
       "macos": {
-        "check": "false",
-        "install": [ { "title": "Open the Dashlane extension page", "cmd": "open 'https://www.dashlane.com/download'" } ]
+        "check": "test -d '/Applications/Bitwarden.app' && echo installed",
+        "install": [ { "cmd": "test -d '/Applications/Bitwarden.app' || brew install --cask bitwarden" } ]
       },
       "linux": {
-        "check": "false",
-        "install": [ { "title": "Open the Dashlane extension page", "cmd": "xdg-open 'https://www.dashlane.com/download' >/dev/null 2>&1 || echo 'Install the Dashlane browser extension from https://www.dashlane.com/download'" } ]
+        "check": "command -v bitwarden >/dev/null 2>&1 && echo installed",
+        "install": [ { "cmd": "command -v bitwarden >/dev/null 2>&1 || sudo snap install bitwarden" } ]
       }
     },
 
