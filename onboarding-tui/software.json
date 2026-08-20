@@ -1,0 +1,495 @@
+{
+  "_help": [
+    "RFID Lab onboarding software list. This is the ONLY file to edit to add/remove tools.",
+    "",
+    "sections[].rule: 'pick-one' (must select >=1), 'optional' (free multi-select), 'required' (locked in when missing).",
+    "software[].kind: 'gui' (desktop app: macOS cask / Windows winget / Linux desktop only — skipped on Linux servers)",
+    "               or 'cli' (terminal tool: runs everywhere, and inside WSL when launched from a Windows host).",
+    "software[].section must match a sections[].id.",
+    "Per-OS command blocks: 'macos', 'linux', or 'any' (fallback used when the OS-specific block is absent).",
+    "  Each block has an optional 'check' (defaults to the top-level 'check') and an 'install' list of {cmd, title?}.",
+    "  A tool is only offered where an applicable block (or, for gui on Windows host, a winget_id) exists.",
+    "'check' must exit 0 (and ideally print a version) iff the tool is already installed.",
+    "'winget_id' installs gui apps on a Windows host; 'follow_up' lists commands the user runs afterwards.",
+    "Unknown keys (like this _help) are ignored, so leave notes freely."
+  ],
+
+  "sections": [
+    { "id": "editors",    "title": " Code Editors — pick at least one ", "rule": "pick-one" },
+    { "id": "docker",     "title": " Docker — optional ",                "rule": "optional" },
+    { "id": "api",        "title": " API / HTTP Clients — pick at least one ", "rule": "pick-one" },
+    { "id": "database",   "title": " Database Tools — pick at least one ",     "rule": "pick-one" },
+    { "id": "git",        "title": " Git Tools — optional ",              "rule": "optional" },
+    { "id": "password",   "title": " Password Managers — optional ",      "rule": "optional" },
+    { "id": "ai",         "title": " AI Tools — optional ",               "rule": "optional" },
+    { "id": "kubernetes", "title": " Kubernetes — optional ",            "rule": "optional" },
+    { "id": "required",   "title": " Required ",                          "rule": "required", "collapsed": true }
+  ],
+
+  "software": [
+    {
+      "name": "VS Code",
+      "description": "Visual Studio Code — the most common choice, big extension ecosystem",
+      "section": "editors",
+      "kind": "gui",
+      "winget_id": "Microsoft.VisualStudioCode",
+      "macos": {
+        "check": "test -d '/Applications/Visual Studio Code.app' && echo installed || code --version | head -1",
+        "install": [ { "cmd": "test -d '/Applications/Visual Studio Code.app' || brew install --cask visual-studio-code" } ]
+      },
+      "linux": {
+        "check": "code --version | head -1",
+        "install": [ { "cmd": "command -v code >/dev/null 2>&1 || { curl -fsSL https://packages.microsoft.com/keys/microsoft.asc | sudo gpg --dearmor -o /usr/share/keyrings/ms-vscode-keyring.gpg && echo 'deb [signed-by=/usr/share/keyrings/ms-vscode-keyring.gpg] https://packages.microsoft.com/repos/code stable main' | sudo tee /etc/apt/sources.list.d/vscode.list && sudo apt-get update -y && sudo apt-get install -y code; }" } ]
+      }
+    },
+    {
+      "name": "VSCodium",
+      "description": "VS Code without Microsoft telemetry/branding",
+      "section": "editors",
+      "kind": "gui",
+      "winget_id": "VSCodium.VSCodium",
+      "macos": {
+        "check": "test -d '/Applications/VSCodium.app' && echo installed || codium --version | head -1",
+        "install": [ { "cmd": "test -d '/Applications/VSCodium.app' || brew install --cask vscodium" } ]
+      },
+      "linux": {
+        "check": "codium --version | head -1",
+        "install": [ { "cmd": "command -v codium >/dev/null 2>&1 || { curl -fsSL https://gitlab.com/paulcarroty/vscodium-deb-rpm-repo/raw/master/pub.gpg | sudo gpg --dearmor -o /usr/share/keyrings/vscodium-archive-keyring.gpg && echo 'deb [signed-by=/usr/share/keyrings/vscodium-archive-keyring.gpg] https://download.vscodium.com/debs vscodium main' | sudo tee /etc/apt/sources.list.d/vscodium.list && sudo apt-get update -y && sudo apt-get install -y codium; }" } ]
+      }
+    },
+    {
+      "name": "Cursor",
+      "description": "Cursor — AI-first VS Code fork (editor app; CLI is under AI Tools)",
+      "section": "editors",
+      "kind": "gui",
+      "preferred": true,
+      "winget_id": "Anysphere.Cursor",
+      "macos": {
+        "check": "test -d '/Applications/Cursor.app' && echo installed",
+        "install": [ { "cmd": "test -d '/Applications/Cursor.app' || brew install --cask cursor" } ]
+      }
+    },
+    {
+      "name": "Zed",
+      "description": "Zed — fast collaborative editor by the Atom team",
+      "section": "editors",
+      "kind": "gui",
+      "preferred": true,
+      "winget_id": "ZedIndustries.Zed",
+      "macos": {
+        "check": "test -d '/Applications/Zed.app' && echo installed || zed --version | head -1",
+        "install": [ { "cmd": "test -d '/Applications/Zed.app' || brew install --cask zed" } ]
+      },
+      "linux": {
+        "check": "export PATH=$HOME/.local/bin:$PATH; zed --version | head -1",
+        "install": [ { "cmd": "command -v zed >/dev/null 2>&1 || { curl -fsSL https://zed.dev/install.sh -o /tmp/zed-install.sh && bash /tmp/zed-install.sh; }" } ]
+      }
+    },
+    {
+      "name": "Xcode",
+      "_note": "macOS only — for the eagle-rfid-app iOS app / TestFlight. Installed via mas (must be signed into the App Store).",
+      "description": "Xcode — Apple IDE for the iOS RFID app (macOS only, large download)",
+      "section": "editors",
+      "kind": "gui",
+      "follow_up": [ "If Xcode didn't install, get it from the App Store (mas needs you signed in)" ],
+      "macos": {
+        "check": "test -d '/Applications/Xcode.app' && echo installed",
+        "install": [ { "cmd": "test -d '/Applications/Xcode.app' || { command -v mas >/dev/null 2>&1 || brew install mas; mas install 497799835; }" } ]
+      }
+    },
+    {
+      "name": "Neovim",
+      "description": "nvim — modal terminal editor",
+      "section": "editors",
+      "kind": "cli",
+      "check": "nvim --version | head -1",
+      "macos": { "install": [ { "cmd": "command -v nvim >/dev/null 2>&1 || brew install neovim" } ] },
+      "linux": { "install": [ { "cmd": "command -v nvim >/dev/null 2>&1 || { sudo apt-get update -y && sudo apt-get install -y neovim; }" } ] }
+    },
+    {
+      "name": "Helix",
+      "description": "hx — modern modal terminal editor, batteries included",
+      "section": "editors",
+      "kind": "cli",
+      "check": "hx --version | head -1",
+      "macos": { "install": [ { "cmd": "command -v hx >/dev/null 2>&1 || brew install helix" } ] },
+      "linux": { "install": [ { "cmd": "command -v hx >/dev/null 2>&1 || { sudo apt-get install -y software-properties-common && sudo add-apt-repository -y ppa:maveonair/helix-editor && sudo apt-get update -y && sudo apt-get install -y helix; }" } ] }
+    },
+
+    {
+      "name": "d4s",
+      "description": "d4s — feature-rich terminal UI for Docker",
+      "section": "docker",
+      "kind": "cli",
+      "check": "export PATH=$HOME/.local/bin:$PATH; d4s --version | head -1",
+      "macos": { "install": [ { "cmd": "command -v d4s >/dev/null 2>&1 || brew install jr-k/d4s/d4s" } ] },
+      "linux": { "install": [ { "cmd": "export PATH=$HOME/.local/bin:$PATH; command -v d4s >/dev/null 2>&1 || { curl -fsSL https://d4scli.io/install.sh -o /tmp/d4s-install.sh && sh /tmp/d4s-install.sh $HOME/.local/bin; }" } ] }
+    },
+    {
+      "name": "k9s",
+      "description": "k9s — terminal UI for Kubernetes clusters",
+      "section": "kubernetes",
+      "kind": "cli",
+      "check": "k9s version 2>/dev/null | head -1",
+      "macos": { "install": [ { "cmd": "command -v k9s >/dev/null 2>&1 || brew install k9s" } ] },
+      "linux": { "install": [ { "cmd": "command -v k9s >/dev/null 2>&1 || { A=$(dpkg --print-architecture 2>/dev/null || echo amd64); curl -fsSL https://github.com/derailed/k9s/releases/latest/download/k9s_Linux_${A}.tar.gz -o /tmp/k9s.tgz && tar -xzf /tmp/k9s.tgz -C /tmp k9s && sudo install /tmp/k9s /usr/local/bin/k9s; }" } ] }
+    },
+    {
+      "name": "lazydocker",
+      "description": "lazydocker — terminal UI for Docker and docker-compose",
+      "section": "docker",
+      "kind": "cli",
+      "check": "export PATH=$HOME/.local/bin:$PATH; lazydocker --version | head -1",
+      "macos": { "install": [ { "cmd": "command -v lazydocker >/dev/null 2>&1 || brew install lazydocker" } ] },
+      "linux": { "install": [ { "cmd": "command -v lazydocker >/dev/null 2>&1 || { curl -fsSL https://raw.githubusercontent.com/jesseduffield/lazydocker/master/scripts/install_update_linux.sh -o /tmp/lazydocker-install.sh && bash /tmp/lazydocker-install.sh; }" } ] }
+    },
+    {
+      "name": "Lens",
+      "description": "Lens Desktop — GUI for managing Kubernetes clusters",
+      "section": "kubernetes",
+      "kind": "gui",
+      "preferred": true,
+      "winget_id": "Mirantis.Lens",
+      "macos": {
+        "check": "test -d '/Applications/Lens.app' && echo installed",
+        "install": [ { "cmd": "test -d '/Applications/Lens.app' || brew install --cask lens" } ]
+      }
+    },
+    {
+      "name": "kubectl",
+      "description": "kubectl — the Kubernetes CLI (the lab runs a k3s cluster)",
+      "section": "kubernetes",
+      "kind": "cli",
+      "check": "kubectl version --client 2>/dev/null | head -1",
+      "macos": { "install": [ { "cmd": "command -v kubectl >/dev/null 2>&1 || brew install kubectl" } ] },
+      "linux": { "install": [ { "cmd": "command -v kubectl >/dev/null 2>&1 || { A=$(dpkg --print-architecture 2>/dev/null || echo amd64); curl -fsSL -o /tmp/kubectl https://dl.k8s.io/release/$(curl -fsSL https://dl.k8s.io/release/stable.txt)/bin/linux/$A/kubectl && sudo install /tmp/kubectl /usr/local/bin/kubectl; }" } ] }
+    },
+    {
+      "name": "Kustomize",
+      "description": "kustomize — templating for the cluster-infra k8s manifests",
+      "section": "kubernetes",
+      "kind": "cli",
+      "check": "export PATH=$HOME/.local/bin:$PATH; kustomize version 2>/dev/null | head -1",
+      "macos": { "install": [ { "cmd": "command -v kustomize >/dev/null 2>&1 || brew install kustomize" } ] },
+      "linux": { "install": [ { "cmd": "export PATH=$HOME/.local/bin:$PATH; command -v kustomize >/dev/null 2>&1 || { mkdir -p $HOME/.local/bin && curl -fsSL https://raw.githubusercontent.com/kubernetes-sigs/kustomize/master/hack/install_kustomize.sh -o /tmp/kustomize-install.sh && bash /tmp/kustomize-install.sh $HOME/.local/bin; }" } ] }
+    },
+
+    {
+      "name": "Yaak",
+      "description": "Yaak — modern desktop API client (REST/GraphQL/gRPC)",
+      "section": "api",
+      "kind": "gui",
+      "preferred": true,
+      "winget_id": "Yaak.Yaak",
+      "macos": {
+        "check": "test -d '/Applications/Yaak.app' && echo installed",
+        "install": [ { "cmd": "test -d '/Applications/Yaak.app' || brew install --cask yaak" } ]
+      }
+    },
+    {
+      "name": "Bruno",
+      "description": "Bruno — open-source, git-friendly API client",
+      "section": "api",
+      "kind": "gui",
+      "winget_id": "Bruno.Bruno",
+      "macos": {
+        "check": "test -d '/Applications/Bruno.app' && echo installed",
+        "install": [ { "cmd": "test -d '/Applications/Bruno.app' || brew install --cask bruno" } ]
+      }
+    },
+
+    {
+      "name": "MySQL Workbench",
+      "description": "MySQL Workbench — official MySQL GUI",
+      "section": "database",
+      "kind": "gui",
+      "winget_id": "Oracle.MySQLWorkbench",
+      "macos": {
+        "check": "test -d '/Applications/MySQLWorkbench.app' && echo installed",
+        "install": [ { "cmd": "test -d '/Applications/MySQLWorkbench.app' || brew install --cask mysqlworkbench" } ]
+      }
+    },
+    {
+      "name": "DBeaver",
+      "description": "DBeaver Community — free cross-database GUI",
+      "section": "database",
+      "kind": "gui",
+      "winget_id": "dbeaver.dbeaver",
+      "macos": {
+        "check": "test -d '/Applications/DBeaver.app' && echo installed",
+        "install": [ { "cmd": "test -d '/Applications/DBeaver.app' || brew install --cask dbeaver-community" } ]
+      }
+    },
+    {
+      "name": "DataGrip",
+      "description": "DataGrip — JetBrains database IDE (free for students)",
+      "section": "database",
+      "kind": "gui",
+      "winget_id": "JetBrains.DataGrip",
+      "macos": {
+        "check": "test -d '/Applications/DataGrip.app' && echo installed",
+        "install": [ { "cmd": "test -d '/Applications/DataGrip.app' || brew install --cask datagrip" } ]
+      }
+    },
+
+    {
+      "name": "lazygit",
+      "description": "lazygit — terminal UI for git",
+      "section": "git",
+      "kind": "cli",
+      "check": "lazygit --version | head -1",
+      "macos": { "install": [ { "cmd": "command -v lazygit >/dev/null 2>&1 || brew install lazygit" } ] },
+      "linux": { "install": [ { "cmd": "command -v lazygit >/dev/null 2>&1 || { case $(uname -m) in aarch64) A=arm64;; *) A=x86_64;; esac; url=$(curl -fsSL https://api.github.com/repos/jesseduffield/lazygit/releases/latest | grep -o 'https://[^\" ]*Linux_'$A'[^\" ]*tar.gz' | head -1); curl -fsSL $url -o /tmp/lazygit.tgz && tar -xzf /tmp/lazygit.tgz -C /tmp lazygit && sudo install /tmp/lazygit /usr/local/bin/lazygit; }" } ] }
+    },
+    {
+      "name": "Tower",
+      "description": "Tower — polished git GUI client",
+      "section": "git",
+      "kind": "gui",
+      "winget_id": "fournova.Tower",
+      "macos": {
+        "check": "test -d '/Applications/Tower.app' && echo installed",
+        "install": [ { "cmd": "test -d '/Applications/Tower.app' || brew install --cask tower" } ]
+      }
+    },
+    {
+      "name": "GitHub Desktop",
+      "description": "GitHub Desktop — beginner-friendly git GUI",
+      "section": "git",
+      "kind": "gui",
+      "winget_id": "GitHub.GitHubDesktop",
+      "macos": {
+        "check": "test -d '/Applications/GitHub Desktop.app' && echo installed",
+        "install": [ { "cmd": "test -d '/Applications/GitHub Desktop.app' || brew install --cask github" } ]
+      }
+    },
+
+    {
+      "name": "1Password",
+      "_note": "Free for students via the GitHub Student Developer Pack (1Password Developer Tools, 1yr): https://1password.com/developers/students",
+      "description": "1Password — password + SSH key + secrets manager (free for students via the GitHub pack)",
+      "section": "password",
+      "kind": "gui",
+      "preferred": true,
+      "winget_id": "AgileBits.1Password",
+      "follow_up": [
+        "Claim the free student plan: https://1password.com/developers/students",
+        "Optional CLI (`op`) for secrets in scripts: brew install --cask 1password-cli"
+      ],
+      "macos": {
+        "check": "test -d '/Applications/1Password.app' && echo installed",
+        "install": [ { "cmd": "test -d '/Applications/1Password.app' || brew install --cask 1password" } ]
+      },
+      "linux": {
+        "check": "command -v 1password >/dev/null 2>&1 && echo installed",
+        "install": [ { "cmd": "command -v 1password >/dev/null 2>&1 || { curl -fsSL https://downloads.1password.com/linux/keys/1password.asc | sudo gpg --dearmor --output /usr/share/keyrings/1password-archive-keyring.gpg && echo 'deb [arch=amd64 signed-by=/usr/share/keyrings/1password-archive-keyring.gpg] https://downloads.1password.com/linux/debian/amd64 stable main' | sudo tee /etc/apt/sources.list.d/1password.list && sudo apt-get update -y && sudo apt-get install -y 1password; }" } ]
+      }
+    },
+    {
+      "name": "Bitwarden",
+      "description": "Bitwarden — open-source password manager (free tier, self-hostable)",
+      "section": "password",
+      "kind": "gui",
+      "winget_id": "Bitwarden.Bitwarden",
+      "follow_up": [
+        "Optional CLI (`bw`) for scripts: brew install bitwarden-cli (macOS) / npm i -g @bitwarden/cli"
+      ],
+      "macos": {
+        "check": "test -d '/Applications/Bitwarden.app' && echo installed",
+        "install": [ { "cmd": "test -d '/Applications/Bitwarden.app' || brew install --cask bitwarden" } ]
+      },
+      "linux": {
+        "check": "command -v bitwarden >/dev/null 2>&1 && echo installed",
+        "install": [ { "cmd": "command -v bitwarden >/dev/null 2>&1 || sudo snap install bitwarden" } ]
+      }
+    },
+
+    {
+      "name": "Cursor CLI",
+      "description": "cursor-agent — Cursor's terminal coding agent",
+      "section": "ai",
+      "kind": "cli",
+      "check": "export PATH=$HOME/.local/bin:$PATH; cursor-agent --version",
+      "follow_up": [ "cursor-agent login" ],
+      "any": { "install": [ { "cmd": "command -v cursor-agent >/dev/null 2>&1 || { curl -fsSL https://cursor.com/install -o /tmp/cursor-agent-install.sh && bash /tmp/cursor-agent-install.sh; }" } ] }
+    },
+    {
+      "name": "OpenCode",
+      "description": "opencode — open-source terminal coding agent by SST",
+      "section": "ai",
+      "kind": "cli",
+      "check": "export PATH=$HOME/.opencode/bin:$PATH; opencode --version",
+      "follow_up": [ "opencode auth login" ],
+      "macos": { "install": [ { "cmd": "command -v opencode >/dev/null 2>&1 || brew install sst/tap/opencode" } ] },
+      "linux": { "install": [ { "cmd": "command -v opencode >/dev/null 2>&1 || { curl -fsSL https://opencode.ai/install -o /tmp/opencode-install.sh && bash /tmp/opencode-install.sh; }" } ] }
+    },
+    {
+      "name": "Claude Code",
+      "description": "claude — Anthropic's terminal coding agent",
+      "section": "ai",
+      "kind": "cli",
+      "check": "export PATH=$HOME/.local/bin:$PATH; claude --version",
+      "follow_up": [ "claude   # log in on first run" ],
+      "any": { "install": [ { "cmd": "command -v claude >/dev/null 2>&1 || { curl -fsSL https://claude.ai/install.sh -o /tmp/claude-install.sh && bash /tmp/claude-install.sh; }" } ] }
+    },
+    {
+      "name": "Codex",
+      "description": "codex — OpenAI's terminal coding agent (needs Node.js on Linux)",
+      "section": "ai",
+      "kind": "cli",
+      "check": "export PATH=$HOME/.local/share/fnm:$PATH; eval \"$(fnm env 2>/dev/null)\"; codex --version",
+      "follow_up": [ "codex login" ],
+      "macos": { "install": [ { "cmd": "command -v codex >/dev/null 2>&1 || brew install codex" } ] },
+      "linux": { "install": [ { "cmd": "export PATH=$HOME/.local/share/fnm:$PATH; eval \"$(fnm env)\"; command -v codex >/dev/null 2>&1 || npm install -g @openai/codex" } ] }
+    },
+
+    {
+      "name": "Xcode Command Line Tools",
+      "_note": "macOS only — provides git, clang, make etc. `xcode-select --install` opens a GUI dialog to confirm.",
+      "description": "Apple command line tools — compilers/git that native builds need (macOS)",
+      "section": "required",
+      "kind": "cli",
+      "check": "xcode-select -p >/dev/null 2>&1 && echo installed",
+      "macos": { "install": [ { "cmd": "xcode-select -p >/dev/null 2>&1 || xcode-select --install" } ] }
+    },
+    {
+      "name": "Homebrew",
+      "description": "macOS package manager — everything else installs through it",
+      "section": "required",
+      "kind": "cli",
+      "check": "brew --version | head -1",
+      "follow_up": [ "eval \"$(/opt/homebrew/bin/brew shellenv)\"   # then reopen your terminal" ],
+      "macos": { "install": [ { "cmd": "command -v brew >/dev/null 2>&1 || { curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh -o /tmp/brew-install.sh && NONINTERACTIVE=1 /bin/bash /tmp/brew-install.sh; }" } ] }
+    },
+    {
+      "name": "GitHub CLI + git",
+      "description": "git version control and gh for GitHub auth/cloning",
+      "section": "required",
+      "kind": "cli",
+      "check": "git --version && gh --version | head -1",
+      "follow_up": [
+        "git config --global user.name \"Your Name\"",
+        "git config --global user.email \"you@auburn.edu\"",
+        "gh auth login --git-protocol ssh   # interactive browser login"
+      ],
+      "macos": {
+        "install": [
+          { "title": "Install git", "cmd": "command -v git >/dev/null 2>&1 || brew install git" },
+          { "title": "Install GitHub CLI", "cmd": "command -v gh >/dev/null 2>&1 || brew install gh" }
+        ]
+      },
+      "linux": {
+        "install": [
+          { "title": "Install git", "cmd": "command -v git >/dev/null 2>&1 || { sudo apt-get update -y && sudo apt-get install -y git; }" },
+          { "title": "Install GitHub CLI", "cmd": "command -v gh >/dev/null 2>&1 || { sudo apt-get update -y && sudo apt-get install -y gh; }" }
+        ]
+      }
+    },
+    {
+      "name": "OrbStack",
+      "description": "OrbStack — Docker daemon + Kubernetes for macOS (replaces Docker Desktop)",
+      "section": "required",
+      "kind": "gui",
+      "follow_up": [ "Open OrbStack once to start the Docker daemon" ],
+      "macos": {
+        "check": "test -d '/Applications/OrbStack.app' && echo installed",
+        "install": [ { "cmd": "test -d '/Applications/OrbStack.app' || brew install --cask orbstack" } ]
+      }
+    },
+    {
+      "name": "Linear",
+      "description": "Linear desktop app — lab issue tracking",
+      "section": "required",
+      "kind": "gui",
+      "winget_id": "Linear.Linear",
+      "macos": {
+        "check": "test -d '/Applications/Linear.app' && echo installed",
+        "install": [ { "cmd": "test -d '/Applications/Linear.app' || brew install --cask linear-linear" } ]
+      }
+    },
+    {
+      "name": "Microsoft Teams",
+      "description": "Microsoft Teams — lab communication",
+      "section": "required",
+      "kind": "gui",
+      "winget_id": "Microsoft.Teams",
+      "macos": {
+        "check": "test -d '/Applications/Microsoft Teams.app' && echo installed",
+        "install": [ { "cmd": "test -d '/Applications/Microsoft Teams.app' || brew install --cask microsoft-teams" } ]
+      }
+    },
+    {
+      "name": "Vault",
+      "description": "HashiCorp Vault CLI — lab secrets",
+      "section": "required",
+      "kind": "cli",
+      "check": "vault --version",
+      "macos": { "install": [ { "cmd": "command -v vault >/dev/null 2>&1 || brew install hashicorp/tap/vault" } ] },
+      "linux": { "install": [ { "cmd": "command -v vault >/dev/null 2>&1 || { curl -fsSL https://apt.releases.hashicorp.com/gpg | sudo gpg --dearmor -o /usr/share/keyrings/hashicorp-archive-keyring.gpg && echo \"deb [signed-by=/usr/share/keyrings/hashicorp-archive-keyring.gpg] https://apt.releases.hashicorp.com $(lsb_release -cs) main\" | sudo tee /etc/apt/sources.list.d/hashicorp.list && sudo apt-get update -y && sudo apt-get install -y vault; }" } ] }
+    },
+    {
+      "name": "Tailscale",
+      "description": "Tailscale — mesh VPN to reach the lab's cluster and internal services",
+      "section": "required",
+      "kind": "cli",
+      "follow_up": [
+        "Sign in to the lab's tailnet: sudo tailscale up   (macOS: open the Tailscale app and sign in)"
+      ],
+      "macos": {
+        "check": "test -d '/Applications/Tailscale.app' && echo installed || tailscale version 2>/dev/null | head -1",
+        "install": [ { "cmd": "test -d '/Applications/Tailscale.app' || command -v tailscale >/dev/null 2>&1 || brew install --cask tailscale" } ]
+      },
+      "linux": {
+        "check": "tailscale version 2>/dev/null | head -1",
+        "install": [ { "cmd": "command -v tailscale >/dev/null 2>&1 || { curl -fsSL https://tailscale.com/install.sh -o /tmp/tailscale-install.sh && sh /tmp/tailscale-install.sh; }" } ]
+      }
+    },
+    {
+      "name": "Go",
+      "description": "Go toolchain for lab services",
+      "section": "required",
+      "kind": "cli",
+      "check": "go version",
+      "macos": { "install": [ { "cmd": "command -v go >/dev/null 2>&1 || brew install go" } ] },
+      "linux": { "install": [ { "cmd": "command -v go >/dev/null 2>&1 || { sudo apt-get update -y && sudo apt-get install -y golang-go; }" } ] }
+    },
+    {
+      "name": "Rust",
+      "description": "rustc + cargo via rustup",
+      "section": "required",
+      "kind": "cli",
+      "check": ". $HOME/.cargo/env 2>/dev/null; rustc --version",
+      "follow_up": [ "echo '. \"$HOME/.cargo/env\"' >> ~/.zshrc" ],
+      "any": { "install": [ { "cmd": "[ -x $HOME/.cargo/bin/rustc ] || { curl --proto '=https' --tlsv1.2 -fsSL https://sh.rustup.rs -o /tmp/rustup-init.sh && sh /tmp/rustup-init.sh -y --no-modify-path; }" } ] }
+    },
+    {
+      "name": "Node.js",
+      "description": "Node LTS via fnm — for React/TS apps",
+      "section": "required",
+      "kind": "cli",
+      "check": "export PATH=$HOME/.local/share/fnm:$PATH; eval \"$(fnm env 2>/dev/null)\"; node --version",
+      "follow_up": [ "echo 'eval \"$(fnm env --use-on-cd)\"' >> ~/.zshrc   # node in new shells" ],
+      "macos": {
+        "install": [
+          { "title": "Install fnm", "cmd": "command -v fnm >/dev/null 2>&1 || brew install fnm" },
+          { "title": "Install Node LTS", "cmd": "export PATH=$HOME/.local/share/fnm:$PATH; eval \"$(fnm env)\"; fnm install --lts && fnm default lts-latest" }
+        ]
+      },
+      "linux": {
+        "install": [
+          { "title": "Install fnm", "cmd": "command -v fnm >/dev/null 2>&1 || [ -x $HOME/.local/share/fnm/fnm ] || { curl -fsSL https://fnm.vercel.app/install -o /tmp/fnm-install.sh && bash /tmp/fnm-install.sh --skip-shell; }" },
+          { "title": "Install Node LTS", "cmd": "export PATH=$HOME/.local/share/fnm:$PATH; eval \"$(fnm env)\"; fnm install --lts && fnm default lts-latest" }
+        ]
+      }
+    },
+    {
+      "name": "Bun",
+      "_note": "EAGLE's sole JS package manager + runtime (bun@1.3.x). pnpm/npm are not used.",
+      "description": "bun — JS runtime + package manager used across the EAGLE monorepo",
+      "section": "required",
+      "kind": "cli",
+      "check": "export PATH=$HOME/.bun/bin:$PATH; bun --version",
+      "any": { "install": [ { "cmd": "export PATH=$HOME/.bun/bin:$PATH; command -v bun >/dev/null 2>&1 || { curl -fsSL https://bun.sh/install -o /tmp/bun-install.sh && bash /tmp/bun-install.sh; }" } ] }
+    }
+  ]
+}
