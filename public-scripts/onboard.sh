@@ -7,7 +7,7 @@
 # beyond curl. Re-runs use the cached copy; pass --refresh to force a
 # re-download.
 #
-#   bash <(curl -fsSL https://raw.githubusercontent.com/AU-RFID/.github/main/public-scripts/onboard-rust.sh)
+#   bash <(curl -fsSL https://raw.githubusercontent.com/AU-RFID/.github/main/public-scripts/onboard.sh)
 #
 set -euo pipefail
 

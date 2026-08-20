@@ -10,7 +10,7 @@ the rest (git, GitHub login, Bun, Go, Rust, Vault, kubectl, and the lab's GUI ap
 **macOS, Linux, or WSL**
 
 ```sh
-bash <(curl -fsSL https://raw.githubusercontent.com/AU-RFID/.github/main/public-scripts/onboard-rust.sh)
+bash <(curl -fsSL https://raw.githubusercontent.com/AU-RFID/.github/main/public-scripts/onboard.sh)
 ```
 
 **Windows (PowerShell, on the host — it will ask which WSL distro to use)**

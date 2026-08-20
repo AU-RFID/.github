@@ -4,7 +4,7 @@
 > welcome screen, automatic installed-vs-wanted scan, sectioned Ubuntu-style
 > checklist, Windows-host + WSL support, and a Linux desktop/server split.
 > Shipped as prebuilt binaries from the `onboarding-tui-v*` releases and
-> launched by `public-scripts/onboard-rust.sh` (macOS/Linux/WSL) or
+> launched by `public-scripts/onboard.sh` (macOS/Linux/WSL) or
 > `public-scripts/onboard.ps1` (Windows host).
 
 ## Editing the software list
@@ -63,7 +63,7 @@ Meilisearch/SpiceDB/Keycloak are cluster-side only. Lint/format is Biome
 
 | | |
 |---|---|
-| Entry points | `public-scripts/onboard-rust.sh` (macOS/Linux/WSL), `public-scripts/onboard.ps1` (Windows host) |
+| Entry points | `public-scripts/onboard.sh` (macOS/Linux/WSL), `public-scripts/onboard.ps1` (Windows host) |
 | Runtime deps | none — static musl / native macOS / Windows binary, cached under `~/.cache/rfid-onboard/bin` (`%LOCALAPPDATA%\rfid-onboard` on Windows); `--refresh` forces a re-download |
 | Release pipeline | `.github/workflows/release-onboarding-tui.yml`, triggered by a `onboarding-tui-v*` tag |
 | Interactive steps (Homebrew installer, `gh auth login`, git identity prompts) | **not** handled inside the TUI (alternate screen conflicts); printed as follow-up commands on the Doctor screen |
@@ -75,7 +75,7 @@ Every change needs a new tag + release before users pick it up.
 
 - [x] Builds clean (`cargo build`, `cargo clippy`) with ratatui 0.29
 - [ ] `cargo run` interactive test
-- [ ] Release workflow run + `onboard-rust.sh` end-to-end
+- [ ] Release workflow run + `onboard.sh` end-to-end
 - [ ] Clean Ubuntu container / WSL test of apt paths
 - Biggest functional gap: the TUI can't wrap interactive installers — that
   would need TUI suspend/resume around those steps.
