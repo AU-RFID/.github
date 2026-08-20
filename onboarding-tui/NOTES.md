@@ -1,8 +1,11 @@
-# Onboarding TUI PoC comparison notes
+# Onboarding TUI notes
 
-> **Decision (2026-07-23): going with the Rust/ratatui PoC.** Auburn-themed
+> **This is the onboarding tool the lab uses.** Rust/ratatui: Auburn-themed
 > welcome screen, automatic installed-vs-wanted scan, sectioned Ubuntu-style
 > checklist, Windows-host + WSL support, and a Linux desktop/server split.
+> Shipped as prebuilt binaries from the `onboarding-tui-v*` releases and
+> launched by `public-scripts/onboard-rust.sh` (macOS/Linux/WSL) or
+> `public-scripts/onboard.ps1` (Windows host).
 
 ## Editing the software list
 
@@ -56,26 +59,23 @@ Meilisearch/SpiceDB/Keycloak are cluster-side only. Lint/format is Biome
   the Windows host instead for cleaner networking.
 
 
-Two PoCs with the same feature set (platform detection, full/pick/doctor modes,
-idempotent installs of core+node+rust+go):
+## Shipping
 
-| | PoC 1: bash + gum | PoC 2: Rust + ratatui |
-|---|---|---|
-| Entry point | `public-scripts/onboard-gum.sh` (self-contained) | `public-scripts/onboard-rust.sh` → prebuilt binary from GitHub Releases |
-| Runtime deps | downloads pinned `gum` v0.17.0 (~5 MB); degrades to plain prompts if that fails (`RFID_ONBOARD_PLAIN=1` forces it) | none at runtime (static musl / native macOS binary) |
-| Build/release pipeline | none | `.github/workflows/release-onboarding-tui.yml`, tag `onboarding-tui-v*` |
-| Interactive steps (Homebrew installer, `gh auth login`, git identity prompts) | handled inline — script hands the terminal over | **not** handled inside the TUI (alternate screen conflicts); printed as follow-up commands on the Doctor screen |
-| UI | sequential prompts/spinners | full-screen: step list + live streaming output pane, doctor summary |
-| Maintainability | one bash file, matches repo conventions, anyone on the team can patch it | ~500 lines Rust across `main.rs`/`tasks.rs`; richer but needs Rust knowledge + a release for every change |
+| | |
+|---|---|
+| Entry points | `public-scripts/onboard-rust.sh` (macOS/Linux/WSL), `public-scripts/onboard.ps1` (Windows host) |
+| Runtime deps | none — static musl / native macOS / Windows binary, cached under `~/.cache/rfid-onboard/bin` (`%LOCALAPPDATA%\rfid-onboard` on Windows); `--refresh` forces a re-download |
+| Release pipeline | `.github/workflows/release-onboarding-tui.yml`, triggered by a `onboarding-tui-v*` tag |
+| Interactive steps (Homebrew installer, `gh auth login`, git identity prompts) | **not** handled inside the TUI (alternate screen conflicts); printed as follow-up commands on the Doctor screen |
+| UI | full-screen: step list + live streaming output pane, doctor summary |
 
-## Findings so far (fill in as we test)
+Every change needs a new tag + release before users pick it up.
 
-- [x] gum v0.17.0 release URL + tarball layout verified on macOS arm64
-- [x] PoC 1 doctor mode runs end-to-end (plain fallback UI) on macOS
-- [x] PoC 2 builds clean (`cargo build`, `cargo clippy`) with ratatui 0.29
-- [ ] PoC 1 interactive gum UI on a real terminal
-- [ ] PoC 2 `cargo run` interactive test
+## Status
+
+- [x] Builds clean (`cargo build`, `cargo clippy`) with ratatui 0.29
+- [ ] `cargo run` interactive test
 - [ ] Release workflow run + `onboard-rust.sh` end-to-end
 - [ ] Clean Ubuntu container / WSL test of apt paths
-- Startup time / size: gum path pays a one-time ~5 MB download; Rust path pays a one-time binary download (~2-4 MB stripped) but needs a published release first.
-- Biggest functional gap: PoC 2 can't wrap interactive installers — a real onboarding flow would need TUI suspend/resume around those steps.
+- Biggest functional gap: the TUI can't wrap interactive installers — that
+  would need TUI suspend/resume around those steps.

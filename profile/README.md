@@ -4,14 +4,22 @@ The RFID Lab at Auburn University is a research institute focusing on the busine
 
 ## New here? Set up your dev environment
 
-Open a terminal (macOS, Linux, or WSL) and paste one of these — it walks you through installing everything you need (git, GitHub login, Node, Rust, Go):
+Paste the line for your machine — it scans what you already have, then installs
+the rest (git, GitHub login, Bun, Go, Rust, Vault, kubectl, and the lab's GUI apps):
+
+**macOS, Linux, or WSL**
 
 ```sh
-# Option A (bash + gum PoC)
-bash <(curl -fsSL https://raw.githubusercontent.com/AU-RFID/.github/main/public-scripts/onboard-gum.sh)
-
-# Option B (Rust TUI PoC — requires a published onboarding-tui release)
 bash <(curl -fsSL https://raw.githubusercontent.com/AU-RFID/.github/main/public-scripts/onboard-rust.sh)
 ```
 
-Both are safe to re-run at any time; pick "Doctor" to just check your setup.
+**Windows (PowerShell, on the host — it will ask which WSL distro to use)**
+
+```powershell
+irm https://raw.githubusercontent.com/AU-RFID/.github/main/public-scripts/onboard.ps1 | iex
+```
+
+Both bootstrappers download the prebuilt onboarding TUI from the latest
+`onboarding-tui-v*` [release](https://github.com/AU-RFID/.github/releases) and
+cache it, so re-running is cheap. Pass `--refresh` to force a re-download.
+Safe to re-run at any time; nothing is reinstalled if it's already there.

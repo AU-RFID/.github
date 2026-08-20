@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# RFID Lab onboarding TUI (PoC 2 bootstrap)
+# RFID Lab onboarding TUI bootstrap
 #
 # Downloads the prebuilt Rust/ratatui onboarding binary for this platform from
 # the latest `onboarding-tui-v*` GitHub Release and runs it. No dependencies
