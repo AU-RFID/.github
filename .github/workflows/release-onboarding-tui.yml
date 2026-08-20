@@ -69,5 +69,5 @@ jobs:
           gh release create "$GITHUB_REF_NAME" \
             --repo "$GITHUB_REPOSITORY" \
             --title "$GITHUB_REF_NAME" \
-            --notes "Prebuilt onboarding TUI binaries (PoC 2). Run via public-scripts/onboard-rust.sh." \
+            --notes "Prebuilt onboarding TUI binaries. Run via public-scripts/onboard.sh (macOS/Linux/WSL) or public-scripts/onboard.ps1 (Windows)." \
             onboarding-tui-*

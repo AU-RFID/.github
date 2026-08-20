@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 #
-# RFID Lab onboarding TUI (PoC 2 bootstrap)
+# RFID Lab onboarding TUI bootstrap
 #
 # Downloads the prebuilt Rust/ratatui onboarding binary for this platform from
 # the latest `onboarding-tui-v*` GitHub Release and runs it. No dependencies
 # beyond curl. Re-runs use the cached copy; pass --refresh to force a
 # re-download.
 #
-#   bash <(curl -fsSL https://raw.githubusercontent.com/AU-RFID/.github/main/public-scripts/onboard-rust.sh)
+#   bash <(curl -fsSL https://raw.githubusercontent.com/AU-RFID/.github/main/public-scripts/onboard.sh)
 #
 set -euo pipefail
 
